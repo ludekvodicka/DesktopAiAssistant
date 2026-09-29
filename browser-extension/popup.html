@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body{font:14px system-ui;width:320px;padding:16px;background:#111a27;color:#e8edf5}
+button{box-sizing:border-box;width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid #456;background:#1c2b3b;color:inherit}
+button{cursor:pointer;background:#24584d}button:disabled{cursor:default}button.enabled{border-color:#72e1c2;color:#72e1c2;background:#163d35}
+small{color:#a2b5c9}h2{font-size:18px}p{line-height:1.45}#desktop{color:#efb86d;overflow-wrap:anywhere}#desktop.connected{color:#72e1c2}
+</style>
+</head>
+<body>
+<h2>Desktop AI Assistant</h2>
+<p>Allow access only to sites where you want to edit text.</p>
+<p id="site">Checking current site…</p>
+<button id="enable" hidden disabled>Enable this site</button>
+<p id="desktop" role="status">Connecting to Desktop AI…</p>
+<button id="connect" hidden>Reconnect desktop</button>
+<p id="status" role="status"></p>
+<small id="version"></small>
+<script src="popup.js"></script>
+</body>
+</html>

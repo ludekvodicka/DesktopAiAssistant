@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Desktop AI Assistant",
+  "version": "0.1.3",
+  "description": "Edit the focused text with your local Desktop AI Assistant.",
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Connect Desktop AI Assistant",
+    "default_popup": "popup.html"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvt1X6KV36+LHIdMQzXdaoR/0KK7z+MTPBl4Z/6JZwVS5BGrDWULaJ6pLU/BxZE8loDfNmPeIdM5XeL7EldPK+odhkV28bo+BBiqW415cgAXD0BjqgbKfts0q1VcIycNymk9lKTx5Z6awhExqKns9bqSnDfpMcvGywz0y4sSi7oOOIfHlxYKifmjJgZkWCym+ykJmvRGyMx4z0gl3oWWQGVRrZXUPK7j84Yyu78oK4rw48WzHSir+QZSfpooRKh4TXdCtOt1QCHzh9DAHDzqPBVokwR1ntIKi/h5M1AOVrfPt822/CKgmkkUvaIQ83OPXX9FdH380TX/FRUDgnpKXuwIDAQAB"
+}

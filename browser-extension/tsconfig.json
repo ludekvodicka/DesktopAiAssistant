@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2022","module":"none","lib":["ES2022","DOM"],"strict":true,"outDir":"dist","types":["chrome"],"skipLibCheck":true},"include":["src/*.ts"]}
