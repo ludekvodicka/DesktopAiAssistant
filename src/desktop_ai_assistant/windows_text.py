@@ -1,11 +1,12 @@
 import multiprocessing as mp
 import threading
 import time
+import uuid
 import ctypes as C
 from ctypes import wintypes as W
 import pythoncom
 import win32gui
-from .winapi import same_target, send_keys
+from .winapi import same_target, target_exists, send_keys
 from .input_monitor import InputMonitor
 
 
@@ -18,6 +19,7 @@ def _worker(connection, revision):
     clipboard = Clipboard()
     module = comtypes.client.GetModule("UIAutomationCore.dll")
     automation = comtypes.client.CreateObject(module.CUIAutomation, interface=module.IUIAutomation)
+    records = {}
     send = C.WinDLL("user32", use_last_error=True).SendMessageTimeoutW
     send.argtypes = [W.HWND, W.UINT, C.c_size_t, C.c_ssize_t, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
     send.restype = C.c_ssize_t
@@ -39,10 +41,13 @@ def _worker(connection, revision):
         encoded = buffer.value.encode("utf-16-le")
         return buffer.value, len(encoded[:start.value * 2].decode("utf-16-le")), len(encoded[:end.value * 2].decode("utf-16-le"))
 
-    def read(target):
-        if not same_target(target):
+    def read(target, element=None):
+        if element is None and not same_target(target):
             raise RuntimeError("The active window changed")
-        element = automation.GetFocusedElement()
+        if not target_exists(target):
+            raise RuntimeError("The original window no longer exists")
+        if element is None:
+            element = automation.GetFocusedElement()
         if not element or element.CurrentProcessId != target["pid"] or element.CurrentIsPassword or not element.CurrentIsEnabled:
             raise RuntimeError("No supported editable field is focused")
         if element.CurrentControlType not in (50004, 50030):
@@ -95,46 +100,98 @@ def _worker(connection, revision):
                 break
             try:
                 if request["op"] == "capture":
-                    result, _ = read(request["target"])
+                    element = automation.GetFocusedElement()
+                    if not same_target(request["target"]):
+                        raise RuntimeError("The active window changed")
+                    result, selected = read(request["target"], element)
+                    token = uuid.uuid4().hex
+                    records[token] = (element, selected)
+                    if len(records) > 100:
+                        del records[next(iter(records))]
+                    result["token"] = token
                 elif request["op"] == "apply":
                     original = request["snapshot"]
-                    current, selected_range = read(original["target"])
-                    for key in ("element", "full", "selectionStart", "selectionEnd"):
+                    relaxed = request.get("allowBackground", False)
+                    retained = records.get(original.get("token"))
+                    if relaxed and retained is None:
+                        raise RuntimeError("The original editor reference expired. Result kept in History.")
+                    element = retained[0] if retained else automation.GetFocusedElement()
+                    current, selected_range = read(original["target"], element)
+                    if relaxed and win32gui.GetWindowText(original["target"]["hwnd"]) != original["target"].get("title", ""):
+                        raise RuntimeError("The original document or conversation changed. Result kept in History.")
+                    keys = ("element", "full") if relaxed else ("element", "full", "selectionStart", "selectionEnd")
+                    for key in keys:
                         if current[key] != original[key]:
                             raise RuntimeError("The field or selection changed; result kept in history")
-                    if request.get("tick") is not None and revision.value != request["tick"]:
+                    if not relaxed and request.get("tick") is not None and revision.value != request["tick"]:
                         raise RuntimeError("User input occurred; result kept in history")
                     replacement = request["text"]
                     expected = original["full"][:original["start"]] + replacement + original["full"][original["end"]:]
                     if original.get("native"):
+                        if native_read(original["native"])[0] != original["full"]:
+                            raise RuntimeError("The original text changed; result kept in History")
                         start = len(original["full"][:original["start"]].encode("utf-16-le")) // 2
                         end = len(original["full"][:original["end"]].encode("utf-16-le")) // 2
                         message(original["native"], 0x00b1, start, end)
                         buffer = C.create_unicode_buffer(replacement)
                         message(original["native"], 0x00c2, 1, C.addressof(buffer))
-                        result, _ = read(original["target"])
+                        result, _ = read(original["target"], element)
                         if result["full"] != expected:
                             raise RuntimeError("Write was not verified; do not repeat automatically")
+                        result.update(token=original.get("token"), background=not same_target(original["target"]))
                         connection.send({"ok": True, "value": result})
                         continue
+                    focused = same_target(original["target"]) and automation.CompareElements(element, automation.GetFocusedElement())
+                    if relaxed and not focused:
+                        value = None
+                        try:
+                            value = element.GetCurrentPattern(10002).QueryInterface(module.IUIAutomationValuePattern)
+                            if value.CurrentIsReadOnly or value.CurrentValue != original["full"]:
+                                value = None
+                        except (comtypes.COMError, ValueError):
+                            pass
+                        # Some Qt editors interpret markup in SetValue as HTML.
+                        if value is None or "<" in expected:
+                            connection.send({"ok": True, "value": {"deferred": True}})
+                            continue
+                        value.SetValue(expected)
+                        result, _ = read(original["target"], element)
+                        if result["full"] != expected:
+                            raise RuntimeError("Write was not verified; do not repeat automatically")
+                        result.update(token=original.get("token"), background=True)
+                        connection.send({"ok": True, "value": result})
+                        continue
+                    if not focused:
+                        raise RuntimeError("Focus the original editor before inserting text")
+                    paste_tick = revision.value if relaxed else request.get("tick")
+                    if relaxed:
+                        selected_range = retained[1]
+                        if not original.get("insert") and not original.get("restoreWhole"):
+                            pattern = element.GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
+                            prefix = pattern.DocumentRange.Clone()
+                            prefix.MoveEndpointByRange(1, selected_range, 0)
+                            if selected_range.GetText(-1) != original["text"] or len(prefix.GetText(-1)) != original["start"]:
+                                raise RuntimeError("The original text range changed; result kept in History")
                     if original.get("insert"):
-                        pattern = automation.GetFocusedElement().GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
+                        pattern = element.GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
                         selected_range = pattern.GetSelection().GetElement(0)
                     if original.get("restoreWhole"):
-                        pattern = automation.GetFocusedElement().GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
+                        pattern = element.GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
                         selected_range = pattern.DocumentRange
                     selected_range.Select()
                     previous, sequence = clipboard.replace(replacement)
                     verified = False
                     paste_started = False
                     try:
-                        if request.get("tick") is not None and revision.value != request["tick"]:
+                        if paste_tick is not None and revision.value != paste_tick:
                             raise RuntimeError("User input occurred; result kept in history")
+                        if not automation.CompareElements(element, automation.GetFocusedElement()):
+                            raise RuntimeError("The focused editor changed; result kept in History")
                         paste_started = True
                         send_keys("Ctrl+V", original["target"])
                         deadline = time.monotonic() + 1.5
                         while time.monotonic() < deadline:
-                            current, _ = read(original["target"])
+                            current, _ = read(original["target"], element)
                             if current["full"] == expected:
                                 verified = True
                                 break
@@ -142,6 +199,7 @@ def _worker(connection, revision):
                         else:
                             raise RuntimeError("Write was not verified; do not repeat automatically")
                         result = current
+                        result["token"] = original.get("token")
                     finally:
                         if verified or not paste_started:
                             try:
@@ -229,8 +287,8 @@ class WindowsText:
             raise RuntimeError("Terminal input is not supported")
         return self.call({"op": "capture", "target": target})
 
-    def apply(self, snapshot, text, tick=None):
-        return self.call({"op": "apply", "snapshot": snapshot, "text": text, "tick": tick})
+    def apply(self, snapshot, text, tick=None, allow_background=False):
+        return self.call({"op": "apply", "snapshot": snapshot, "text": text, "tick": tick, "allowBackground": allow_background})
 
     def close(self):
         with self.lock:

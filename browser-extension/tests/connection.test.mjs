@@ -84,6 +84,26 @@ test('permission registration is serialized and popup receives real native-host 
     assert.equal(reply.desktopError, 'Native host has exited.');
 });
 
+test('apply addresses the captured tab even when another window is active', async () => {
+    const w = worker();
+    const sent = [];
+    w.chrome.windows.getLastFocused = async () => ({id: 9, focused: false});
+    w.chrome.tabs.get = async id => ({id, windowId: 1});
+    w.chrome.tabs.sendMessage = async (id, request) => { sent.push([id, request.op]); return {ok: true, value: {background: true}}; };
+    const port = w.ports[0];
+    port.onMessage.emit({op: 'hello'});
+    port.onMessage.emit({id: 'apply', op: 'apply', snapshot: {tabId: 2, windowId: 1}});
+    await tick();
+    assert.deepEqual(sent, [[2, 'apply']]);
+    assert.equal(port.replies[0].value.windowId, 1);
+    assert.equal(port.replies[0].value.background, true);
+    w.chrome.tabs.get = async id => ({id, windowId: 7});
+    port.onMessage.emit({id: 'changed', op: 'apply', snapshot: {tabId: 2, windowId: 1}});
+    await tick();
+    assert.equal(port.replies[1].code, 'target_changed');
+    assert.equal(sent.length, 1);
+});
+
 test('popup uses the current site permission and only offers reconnect when disconnected', async () => {
     const html = readFileSync(new URL('../popup.html', import.meta.url), 'utf8');
     for (const [url, permitted, connected] of [

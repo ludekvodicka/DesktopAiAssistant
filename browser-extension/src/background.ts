@@ -32,10 +32,12 @@ class BrowserActionError extends Error {
 async function forwardRequest(port: chrome.runtime.Port, request: {id: string; op: string; snapshot?: {tabId: number; windowId: number}}) {
     try {
         const window = await chrome.windows.getLastFocused();
-        if (!window.focused) throw new BrowserActionError('browser_not_focused', 'Focus the Chrome or Edge window containing your text.');
-        const [tab] = await chrome.tabs.query({active: true, windowId: window.id});
+        const savedTarget = request.op === 'apply' && request.snapshot;
+        if (!savedTarget && !window.focused) throw new BrowserActionError('browser_not_focused', 'Focus the Chrome or Edge window containing your text.');
+        const tab = savedTarget ? await chrome.tabs.get(savedTarget.tabId) : (await chrome.tabs.query({active: true, windowId: window.id}))[0];
         if (!tab?.id) throw new BrowserActionError('no_active_tab', 'No active browser tab.');
-        if (request.snapshot && (request.snapshot.tabId !== tab.id || request.snapshot.windowId !== window.id)) throw new BrowserActionError('target_changed', 'Browser tab changed. Result kept in History.');
+        const windowId = savedTarget ? tab.windowId : window.id;
+        if (request.snapshot && (request.snapshot.tabId !== tab.id || request.snapshot.windowId !== windowId)) throw new BrowserActionError('target_changed', 'Browser tab changed. Result kept in History.');
         if (request.op === 'capture') {
             const url = new URL(tab.url || 'about:blank');
             if (url.protocol !== 'https:' && !(url.protocol === 'http:' && url.hostname === 'localhost')) throw new BrowserActionError('unsupported_page', 'This page does not support text editing. Open an enabled HTTPS website.');
@@ -45,7 +47,7 @@ async function forwardRequest(port: chrome.runtime.Port, request: {id: string; o
         }
         const response = await chrome.tabs.sendMessage(tab.id, request, {frameId: 0});
         if (!response?.ok) throw new BrowserActionError('editor_error', response?.error || 'The editor did not respond. Reload the page and focus its text field.');
-        port.postMessage({id: request.id, ok: true, value: {...response.value, tabId: tab.id, windowId: window.id}});
+        port.postMessage({id: request.id, ok: true, value: {...response.value, tabId: tab.id, windowId}});
     } catch (error) {
         try {
             port.postMessage({id: request.id, ok: false, code: error instanceof BrowserActionError ? error.code : 'browser_error', error: error instanceof Error ? error.message : String(error)});

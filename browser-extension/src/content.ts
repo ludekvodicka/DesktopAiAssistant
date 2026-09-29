@@ -2,17 +2,15 @@
     if ((globalThis as unknown as {desktopAiLoaded?: boolean}).desktopAiLoaded) return;
     (globalThis as unknown as {desktopAiLoaded?: boolean}).desktopAiLoaded = true;
     type Field = HTMLElement | HTMLInputElement | HTMLTextAreaElement;
-    type RecordEntry = {element: Field; full: string; text: string; start: number; end: number; selection: string; epoch: number; range?: Range; nodes: Map<string, Node>; after?: string};
+    type RecordEntry = {element: Field; full: string; text: string; start: number; end: number; selection: string; context: string; range?: [number[], number, number[], number]; nodes: Map<string, Node>; after?: string};
     const records = new Map<string, RecordEntry>();
-    let epoch = 0;
-    let composing = false;
-    const observer = new MutationObserver(() => epoch++);
-    for (const event of ['input', 'keydown', 'pointerdown', 'selectionchange', 'blur']) document.addEventListener(event, () => epoch++, true);
-    document.addEventListener('compositionstart', () => { composing = true; epoch++; });
-    document.addEventListener('compositionend', () => { composing = false; epoch++; });
+    let composing: EventTarget | null = null;
+    document.addEventListener('compositionstart', event => { composing = event.target; });
+    document.addEventListener('compositionend', () => { composing = null; });
     const escapeText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const isPlain = (element: Field): element is HTMLInputElement | HTMLTextAreaElement => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
     const fullText = (element: Field) => isPlain(element) ? element.value : element.innerHTML;
+    const contextKey = (element: Field) => JSON.stringify([location.href, element.id, element.getAttribute('name'), element.getAttribute('type'), element.getAttribute('role'), element.getAttribute('contenteditable')]);
     function path(node: Node, root: Node): number[] {
         const result: number[] = [];
         while (node !== root) {
@@ -84,8 +82,6 @@
     }
     function capture() {
         const element = focused();
-        observer.disconnect();
-        observer.observe(element, {subtree: true, childList: true, characterData: true, attributes: true});
         const full = fullText(element);
         if (full.length > 500000) throw Error('Editor is too large');
         const selection = selectionKey(element);
@@ -95,14 +91,14 @@
             const selected = element.selectionStart !== element.selectionEnd;
             const start = selected ? element.selectionStart : 0;
             const end = selected ? element.selectionEnd : full.length;
-            record = {element, full, text: full.slice(start, end), start, end, selection, epoch, nodes: new Map()};
+            record = {element, full, text: full.slice(start, end), start, end, selection, context: contextKey(element), nodes: new Map()};
         } else {
             const selected = getSelection()!;
             const range = selected.getRangeAt(0).cloneRange();
             const whole = range.collapsed;
             if (whole) range.selectNodeContents(element);
             const encoded = encode(range.cloneContents(), whole);
-            record = {element, full, text: encoded.text, start: 0, end: 0, selection, epoch, range, nodes: encoded.nodes};
+            record = {element, full, text: encoded.text, start: 0, end: 0, selection, context: contextKey(element), range: [path(range.startContainer, element), range.startOffset, path(range.endContainer, element), range.endOffset], nodes: encoded.nodes};
         }
         if (records.size > 100) records.delete(records.keys().next().value!);
         const token = crypto.randomUUID(); records.set(token, record);
@@ -110,30 +106,40 @@
     }
     function apply(snapshot: {token: string; document: number; insert?: boolean}, text: string) {
         const record = records.get(snapshot.token);
-        if (!record || snapshot.document !== performance.timeOrigin || !record.element.isConnected || focused() !== record.element || epoch !== record.epoch || fullText(record.element) !== record.full || selectionKey(record.element) !== record.selection) throw Error('Editor, selection or document changed; result kept in history');
+        if (!record || snapshot.document !== performance.timeOrigin || !record.element.isConnected || contextKey(record.element) !== record.context || fullText(record.element) !== record.full) throw Error('The original editor or document changed; result kept in history');
+        if (composing instanceof Node && record.element.contains(composing)) return {deferred: true};
+        const background = !document.hasFocus() || document.activeElement !== record.element;
         if (isPlain(record.element)) {
-            const start = snapshot.insert ? record.element.selectionStart! : record.start;
-            const end = snapshot.insert ? record.element.selectionEnd! : record.end;
-            record.element.setRangeText(text, start, end, 'end');
+            if (record.element.readOnly || record.element.disabled) throw Error('The original field is no longer editable');
+            const originalSelection = JSON.parse(record.selection) as [number, number, string];
+            const start = snapshot.insert ? originalSelection[0] : record.start;
+            const end = snapshot.insert ? originalSelection[1] : record.end;
+            record.element.setRangeText(text, start, end, 'preserve');
             record.element.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertReplacementText', data: text}));
             if (record.element.value !== record.full.slice(0, start) + text + record.full.slice(end)) throw Error('Write was not verified');
         } else {
+            if (background) return {deferred: true};
+            if (focused() !== record.element) return {deferred: true};
             const html = render(text, record);
             const clone = record.element.cloneNode(true) as HTMLElement;
-            const locate = (indices: number[]) => indices.reduce((node, index) => node.childNodes[index], clone as Node);
+            const locate = (root: Node, indices: number[]) => indices.reduce((node, index) => node.childNodes[index], root);
+            const [startPath, startOffset, endPath, endOffset] = record.range!;
             const expected = document.createRange();
-            expected.setStart(locate(path(record.range!.startContainer, record.element)), record.range!.startOffset);
-            expected.setEnd(locate(path(record.range!.endContainer, record.element)), record.range!.endOffset);
+            expected.setStart(locate(clone, startPath), startOffset);
+            expected.setEnd(locate(clone, endPath), endOffset);
             expected.deleteContents(); expected.insertNode(expected.createContextualFragment(html));
             const selection = getSelection()!;
-            selection.removeAllRanges(); selection.addRange(record.range!);
+            const range = document.createRange();
+            range.setStart(locate(record.element, startPath), startOffset);
+            range.setEnd(locate(record.element, endPath), endOffset);
+            selection.removeAllRanges(); selection.addRange(range);
             if (!document.execCommand('insertHTML', false, html)) throw Error('Editor rejected formatted insertion');
             record.element.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertReplacementText'}));
             const objects = (node: HTMLElement) => Array.from(node.querySelectorAll('img,a,.gmail_signature,.gmail_quote')).map(element => [element.tagName, element.getAttribute('src'), element.getAttribute('href'), element.textContent]);
             if (record.element.textContent !== clone.textContent || JSON.stringify(objects(record.element)) !== JSON.stringify(objects(clone))) throw Error('Formatted write was not verified. Do not repeat automatically.');
         }
         record.after = fullText(record.element);
-        return {token: snapshot.token, document: performance.timeOrigin, full: record.after, text, originalFull: record.full, rich: !isPlain(record.element)};
+        return {token: snapshot.token, document: performance.timeOrigin, full: record.after, text, originalFull: record.full, rich: !isPlain(record.element), background};
     }
     function restore(snapshot: {token: string; document: number}) {
         const record = records.get(snapshot.token);

@@ -47,7 +47,7 @@ Both shortcuts are configurable. A mouse button can trigger the ring by mapping 
 
 1. Focus a supported editor and select text.
 2. Open the ring and choose **English → Formal**, **English → Social**, or **Čeština**.
-3. Keep the target unchanged while the action runs. Typing, clicking, scrolling, or changing focus can prevent automatic insertion.
+3. You can work in another window while the action runs. Supported editors receive the result in the original unchanged field. Other editors wait until you return; **Cancel insertion** stops that pending write.
 4. If the result is held back, inspect it in **History**.
 
 With no selection, a text action uses the whole focused field. AI actions never send Enter. Macro key steps can send Enter when explicitly configured.
@@ -90,7 +90,7 @@ After updating the extension, reload it and refresh the affected page. The [guid
 
 Local data lives under `%LOCALAPPDATA%/DesktopAiAssistant`. History payloads and bridge credentials use Windows DPAPI for the current user. Settings and macro snippets are ordinary JSON; provider jobs can contain submitted text. Review settings exports before sharing them.
 
-The app captures the target before an action and checks it again before writing. A changed editor, selection, or input state can retain the result in History instead of inserting it. Restore also checks the target and can refuse an unsafe replacement.
+The app retains the original editor and selected range, then checks the editor identity and full content before writing. Changed text, a closed editor, or a changed document keeps the result in History. Direct UI Automation replacement works with plain text and may reset the editor's formatting or native Undo; use History to restore the original text. Restore also checks the target and can refuse an unsafe replacement.
 
 **Known limits:** Windows only; compatibility is not universal. Telegram Desktop, Gmail autosave/reopening, and accessibility need further hands-on verification. Elevated windows and general rich text outside Gmail are outside the supported scope.
 

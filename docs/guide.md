@@ -32,6 +32,21 @@ Profiles match exact executable filenames. New installations start with no profi
 
 ## History and restore
 
+You can switch windows while an AI action runs. Native Windows Edit controls, writable UI Automation
+fields, and plain browser fields can receive the result in the original field in the background.
+The app compares the entire original content and target identity before writing. A different document,
+closed editor, or changed text stops insertion and keeps the result in History.
+
+Editors requiring a keyboard paste and formatted Gmail fields wait for you to return to the same
+unchanged field. **Result ready** identifies this state; **Cancel insertion** or the stop shortcut
+cancels the pending write while retaining the result. Only one action runs at a time, including this
+waiting period. The app never brings the target window to the foreground for automatic insertion.
+
+Direct UI Automation writes replace the field's plain text value. They can reset formatting and
+the editor's native Undo. Use these desktop actions on plain text; original text remains available
+through History. Text containing `<` waits for foreground insertion because some editors treat it
+as HTML. Native Windows Edit and the browser adapter use their own addressed replacement paths.
+
 History contains original text, results, status, and errors. Copying the original is available independently of restore.
 
 Select an applied result and choose **Restore**, focus the original editor, then press the ring shortcut. Restore requires a matching target and refuses when the document has changed. Browser navigation or a restarted app can invalidate the target.
@@ -42,7 +57,11 @@ The extension keeps Gmail's original DOM structure locally and passes text with 
 
 Enable sites individually. Plain text fields work on enabled HTTPS sites; rich text is limited to Gmail compose. When the extension is unavailable, Gmail does not fall back to a plain-text desktop paste.
 
-Changing a document, tab, window, selection, or field can invalidate the result. After an update, reload the unpacked extension and refresh the page.
+Switching to another tab or window does not discard a plain-field result. The extension addresses the
+saved tab and field, checking its document, URL, identity and full content. Gmail's formatted body
+waits until that original field is focused again, then applies the originally captured range.
+Navigating, closing, replacing or changing the source field stops insertion. After an update,
+reload the unpacked extension and refresh the page.
 
 ## Storage and boundaries
 

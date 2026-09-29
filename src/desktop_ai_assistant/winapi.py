@@ -48,6 +48,16 @@ def same_target(target):
         return False
 
 
+def target_exists(target):
+    try:
+        if not win32gui.IsWindow(target["hwnd"]):
+            return False
+        _, pid = win32process.GetWindowThreadProcessId(target["hwnd"])
+        return pid == target["pid"] and psutil.Process(pid).create_time() == target["started"]
+    except (OSError, RuntimeError, psutil.Error):
+        return False
+
+
 class KeyboardInput(C.Structure):
     _fields_ = [("wVk", W.WORD), ("wScan", W.WORD), ("dwFlags", W.DWORD), ("time", W.DWORD), ("dwExtraInfo", C.c_size_t)]
 

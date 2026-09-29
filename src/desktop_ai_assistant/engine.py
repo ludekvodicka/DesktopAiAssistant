@@ -4,7 +4,7 @@ import threading
 from urllib.parse import urlparse
 import win32gui
 from . import providers
-from .winapi import same_target, send_keys, activate
+from .winapi import same_target, target_exists, send_keys, activate
 
 
 class Engine:
@@ -16,6 +16,7 @@ class Engine:
     progress: object
     edit_target: dict | None
     invalidated: threading.Event
+    waiting_for_editor: bool
 
     def __init__(self, config, history, windows, browser, progress):
         self.config = config
@@ -26,6 +27,7 @@ class Engine:
         self.progress = progress
         self.edit_target = None
         self.invalidated = threading.Event()
+        self.waiting_for_editor = False
 
     def capture(self, target):
         if not same_target(target):
@@ -37,10 +39,8 @@ class Engine:
     def apply(self, snapshot, text, tick):
         if self.cancel.is_set():
             raise providers.Cancelled("Cancelled")
-        if self.invalidated.is_set() or not same_target(snapshot["target"]) or self.windows.input_tick() != tick:
-            raise RuntimeError("Input or window changed. Result is available in History.")
         if snapshot["kind"] == "windows":
-            return self.windows.apply(snapshot, text, tick)
+            return self.windows.apply(snapshot, text, tick, allow_background=True)
         elif snapshot["kind"] == "browser":
             return self.browser.apply(snapshot, text)
         else:
@@ -82,16 +82,30 @@ class Engine:
                 self.history.update(job, "unchanged")
                 self.progress("No changes needed. The text is already correct.")
                 return True
-            if self.invalidated.is_set() or not same_target(target) or self.windows.input_tick() != tick:
-                reason = "Result ready in History. Typing, a click or a window change prevented automatic insertion."
-                self.history.update(job, "ready", error=reason)
-                self.progress(reason)
-                return False
             self.history.update(job, "writing")
             after = self.apply(snapshot, result, tick)
+            if after.get("deferred"):
+                self.waiting_for_editor = True
+                reason = "Result ready. Return to the original unchanged field for insertion, or stop the action."
+                self.history.update(job, "ready", error=reason)
+                self.progress(reason)
+                while after.get("deferred"):
+                    if self.cancel.wait(0.3):
+                        raise providers.Cancelled("Cancelled; result kept in History")
+                    if not target_exists(target):
+                        raise RuntimeError("The original window closed. Result kept in History.")
+                    if not same_target(target):
+                        continue
+                    tick = self.windows.input_tick()
+                    if self.cancel.wait(0.3):
+                        raise providers.Cancelled("Cancelled; result kept in History")
+                    if self.windows.input_tick() != tick:
+                        continue
+                    after = self.apply(snapshot, result, tick)
+            self.waiting_for_editor = False
             warning = after.get("clipboardWarning", "")
             self.history.update(job, "applied", after=after, error=warning)
-            self.progress(warning or "Text updated. Original saved in History.")
+            self.progress(warning or ("Text updated in the original editor. Original saved in History." if after.get("background") else "Text updated. Original saved in History."))
             return True
         except providers.Cancelled:
             self.history.update(job, "cancelled")
@@ -100,6 +114,7 @@ class Engine:
             self.history.update(job, "failed", error=str(error) or type(error).__name__)
             raise
         finally:
+            self.waiting_for_editor = False
             self.edit_target = None
 
     def app_command(self, action):

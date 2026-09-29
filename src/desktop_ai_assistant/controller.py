@@ -94,6 +94,10 @@ class Controller(QObject):
     def busy(self):
         return self._busy
 
+    @Property(bool, notify=changed)
+    def waitingForEditor(self):
+        return self.engine.waiting_for_editor
+
     @Property('QVariantMap', notify=changed)
     def settings(self):
         return self.config.value
