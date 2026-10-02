@@ -81,6 +81,12 @@ waits until that original field is focused again, then applies the originally ca
 Navigating, closing, replacing or changing the source field stops insertion. After an update,
 reload the unpacked extension and refresh the page.
 
+## Updates
+
+An installed copy checks GitHub releases on its own; **Check for updates** in the tray menu checks at once. A new version downloads in the background and is checked against the release's `SHA256SUMS.txt`. The tray shows one notice when it is ready, and the **Updates** group on **Overview** shows its release notes with **Restart and install** and **View on GitHub**. Without a click, the update installs on the next quit. Settings, history and the browser registration stay; reload the unpacked extension afterwards.
+
+A copy run from source never updates itself.
+
 ## Storage and boundaries
 
 The default data folder is `%LOCALAPPDATA%/DesktopAiAssistant`. Development and isolated tests can override it with `DESKTOP_AI_DATA`.

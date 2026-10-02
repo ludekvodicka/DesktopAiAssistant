@@ -266,7 +266,7 @@ class WindowsText:
         self.input_monitor = InputMonitor()
 
     def input_tick(self):
-        if not self.input_monitor.thread.is_alive():
+        if not self.input_monitor.process.is_alive():
             raise RuntimeError("Input monitoring stopped. Restart the assistant.")
         return self.input_monitor.revision.value
 

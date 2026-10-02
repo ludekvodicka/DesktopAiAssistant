@@ -594,7 +594,7 @@ class Controller(QObject):
         if user32.GetAsyncKeyState(27) & 0x8000:
             self.hideMenu.emit()
         clicks = self.windows.input_monitor.clicks.value
-        # A click outside the ring shapes never reaches the ring window, so the passive mouse hook reports it.
+        # A click outside the ring shapes never reaches the ring window, so the input monitor reports it.
         if self._ring_visible and clicks != self._ring_clicks:
             self._ring_clicks = clicks
             if window_at_cursor() != self.ring_window:

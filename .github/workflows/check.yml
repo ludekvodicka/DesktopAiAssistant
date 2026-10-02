@@ -21,7 +21,7 @@ jobs:
       - run: python -m pip install -r requirements.lock.txt
       - run: python -m pip install -e .
       - name: Offline desktop checks
-        run: python -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
+        run: python -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_raw_input.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
       - name: Extension build and tests
         working-directory: browser-extension
         shell: pwsh

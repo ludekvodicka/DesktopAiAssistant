@@ -6,7 +6,7 @@ Select text in another app, open the ring, and choose an action. Correct English
 
 ![Action ring with the English submenu attached to its outer edge](docs/images/action-ring.png)
 
-**Windows preview, source version 0.4.6.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
+**Windows preview, version 0.5.1.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
 
 ## What it does
 
@@ -122,7 +122,7 @@ The app retains the original editor and selected range, then checks the editor i
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
-.venv/Scripts/python.exe -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
+.venv/Scripts/python.exe -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_raw_input.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
 cd browser-extension
 npm ci
 npm run build
