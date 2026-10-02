@@ -149,10 +149,11 @@ def test_region_waits_for_pick_and_stores_no_image(lane, monkeypatch):
 
 def test_new_request_replaces_running_translation(lane, monkeypatch):
     texts = iter(["block", "second"])
+    calls = []
     lane.translator.read_selection = lambda target: plain(next(texts))
-    monkeypatch.setattr(translation.providers, "translate", blocking([], "druhý"))
+    monkeypatch.setattr(translation.providers, "translate", blocking(calls, "druhý"))
     lane.translator.start("selection", TARGET)
-    wait_until(lambda: lane.translator.state == "translating")
+    wait_until(lambda: len(calls) == 1)
     lane.translator.start("selection", TARGET)
     wait_until(lambda: lane.translator.state == "done")
     assert "druhý" in lane.translator.resultHtml

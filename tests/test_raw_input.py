@@ -8,7 +8,7 @@ import time
 import psutil
 import pytest
 import desktop_ai_assistant
-from desktop_ai_assistant import input_monitor
+from desktop_ai_assistant import input_monitor, windows_text
 from desktop_ai_assistant.input_monitor import INPUT_MARKER, InputMonitor, RawInput, count
 
 
@@ -99,6 +99,20 @@ def test_monitor_starts_and_closes_idempotently():
         assert not monitor.process.is_alive()
     finally:
         monitor.close()
+
+
+def test_input_tick_reports_monitor_death():
+    adapter = windows_text.WindowsText()
+    try:
+        assert adapter.input_tick() >= 0
+        adapter.input_monitor.process.kill()
+        adapter.input_monitor.process.join(3)
+        assert not adapter.input_monitor.process.is_alive()
+        with pytest.raises(RuntimeError) as error:
+            adapter.input_tick()
+        assert str(error.value) == "Input monitoring stopped. Restart the assistant."
+    finally:
+        adapter.close()
 
 
 HELPER = """
