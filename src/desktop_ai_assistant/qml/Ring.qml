@@ -19,7 +19,6 @@ Item {
     scale: backend.settings.size
     opacity: 1
     Behavior on opacity { NumberAnimation { duration: backend.settings.reducedMotion ? 0 : 130 } }
-    Connections { target: backend; function onNavigationChanged(index, child) { if (!root.preview) { root.hovered = index; root.childHover = child } } }
 
     Rectangle { x: 135; y: 135; width: 330; height: 330; radius: 165; color: "#19000000" }
     Repeater {

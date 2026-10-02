@@ -15,12 +15,13 @@ ApplicationWindow {
     property int page: 0
     property int macroIndex: -1
     property int profileIndex: -1
-    property var actionChoices: backend.catalog.filter(a => !['', 'application', 'macros'].includes(a.id)).concat(draft.macros.map(m => ({id: 'macro:' + m.id, name: m.name})), draft.folders.map(f => ({id: 'folder:' + f.id, name: f.name})))
-    property int historyIndex: -1
+    property var catalog: backend.previewCatalog(JSON.stringify(draft))
+    property var actionChoices: catalog.filter(a => !['', 'application', 'macros'].includes(a.id)).concat(draft.macros.map(m => ({id: 'macro:' + m.id, name: m.name})), draft.folders.map(f => ({id: 'folder:' + f.id, name: f.name})))
+    property string historyId: ''
     property string historyFilter: ""
     property string actionFilter: ""
-    property var historyRows: backend.historyEntries.filter(entry => (!actionFilter || entry.action === actionFilter) && ((entry.displayOriginal || '') + (entry.displayResult || '') + entry.action).toLowerCase().includes(historyFilter.toLowerCase()))
-    property var historyItem: historyIndex >= 0 && historyIndex < historyRows.length ? historyRows[historyIndex] : ({})
+    property var historyRows: backend.historyEntries.filter(entry => (!actionFilter || entry.displayAction === actionFilter) && ((entry.displayOriginal || '') + (entry.displayResult || '') + entry.displayAction).toLowerCase().includes(historyFilter.toLowerCase()))
+    property var historyItem: historyRows.find(entry => entry.id === historyId) || ({})
     function updateDraft() { draft = JSON.parse(JSON.stringify(draft)) }
     function removeMacro() {
         const action = 'macro:' + draft.macros[macroIndex].id
@@ -57,7 +58,12 @@ ApplicationWindow {
                     }
                 }
                 Item { Layout.fillHeight: true }
-                Label { text: "WINDOWS PREVIEW  " + backend.version; font.pixelSize: 9; opacity: 0.5 }
+                Label {
+                    objectName: "updateIndicator"
+                    text: updates.tone === "muted" ? "WINDOWS PREVIEW  " + backend.version : updates.text.toUpperCase()
+                    font.pixelSize: 9; opacity: updates.tone === "muted" ? 0.5 : 0.9
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: window.page = 0 }
+                }
                 Label { text: "Local history · your AI account"; font.pixelSize: 10; opacity: 0.6 }
             }
         }
@@ -104,6 +110,7 @@ ApplicationWindow {
                                 SpinBox { objectName: "historyDays"; from: 1; to: 365; value: window.draft.historyDays; onValueModified: window.draft.historyDays = value }
                             }
                         }
+                        UpdatePanel { Layout.fillWidth: true }
                         RowLayout {
                             Button { text: "Export settings"; onClicked: backend.exportSettings() }
                             Button { text: "Preview import"; onClicked: { const value = backend.importSettings(); if (value) window.draft = JSON.parse(value) } }
@@ -150,7 +157,7 @@ ApplicationWindow {
                                         TextArea { Layout.fillWidth: true; Layout.minimumHeight: 90; visible: ['text', 'open', 'activate'].includes(modelData.type); text: String(modelData.value); placeholderText: modelData.type === 'text' ? 'Text to insert' : modelData.type === 'activate' ? 'Target process, for example notepad.exe' : 'Application, file or website'; wrapMode: TextEdit.Wrap; onTextChanged: if (activeFocus) window.draft.macros[window.macroIndex].steps[index].value = text }
                                         ShortcutField { Layout.fillWidth: true; visible: modelData.type === 'keys'; text: String(modelData.value); onEditingFinished: window.draft.macros[window.macroIndex].steps[index].value = text }
                                         SpinBox { visible: modelData.type === 'delay'; from: 0; to: 600; value: modelData.type === 'delay' ? Number(modelData.value) * 10 : 0; textFromValue: value => (value / 10).toFixed(1) + ' seconds'; onValueModified: window.draft.macros[window.macroIndex].steps[index].value = value / 10 }
-                                        ComboBox { Layout.fillWidth: true; visible: ['ai', 'app'].includes(modelData.type); model: window.actionChoices.filter(a => modelData.type === 'ai' ? ['english_formal', 'english_social', 'czech'].includes(a.id) : ['jamat_new', 'jamat_remarkable'].includes(a.id)); textRole: 'name'; valueRole: 'id'; currentIndex: model.findIndex(a => a.id === modelData.value); onActivated: window.draft.macros[window.macroIndex].steps[index].value = currentValue }
+                                        ComboBox { objectName: 'macroStepAction' + index; Layout.fillWidth: true; visible: ['ai', 'app'].includes(modelData.type); model: window.actionChoices.filter(a => modelData.type === 'ai' ? a.edit : ['jamat_new', 'jamat_remarkable'].includes(a.id)); textRole: 'name'; valueRole: 'id'; currentIndex: model.findIndex(a => a.id === modelData.value); onActivated: window.draft.macros[window.macroIndex].steps[index].value = currentValue }
                                         Label { visible: modelData.type === 'keys' && String(modelData.value).toLowerCase().includes('enter'); text: "This explicit Enter step may send a message."; color: "#efb86d" }
                                     }
                                     DropArea {
@@ -215,7 +222,7 @@ ApplicationWindow {
                                 required property var modelData
                                 required property int index
                                 ShortcutField { text: modelData.key; placeholderText: "Ctrl+Alt+E"; onEditingFinished: window.draft.bindings[index].key = text }
-                                ComboBox { Layout.fillWidth: true; model: window.actionChoices.filter(a => !['english', 'system'].includes(a.id) && !a.id.startsWith('folder:')); textRole: 'name'; valueRole: 'id'; currentIndex: model.findIndex(a => a.id === modelData.action); onActivated: window.draft.bindings[index].action = currentValue }
+                                ComboBox { objectName: 'shortcutAction' + index; Layout.fillWidth: true; model: window.actionChoices.filter(a => !a.group && !a.id.startsWith('folder:')); textRole: 'name'; valueRole: 'id'; currentIndex: model.findIndex(a => a.id === modelData.action); onActivated: window.draft.bindings[index].action = currentValue }
                                 ComboBox { Layout.fillWidth: true; model: [{id: '', name: 'All apps'}].concat(window.draft.profiles); textRole: 'name'; valueRole: 'id'; currentIndex: model.findIndex(a => a.id === (modelData.profile || '')); onActivated: window.draft.bindings[index].profile = currentValue }
                                 Button { text: "×"; onClicked: { window.draft.bindings.splice(index, 1); window.updateDraft() } }
                             }
@@ -227,12 +234,12 @@ ApplicationWindow {
                 RowLayout {
                     ColumnLayout {
                         Layout.preferredWidth: 230; Layout.fillHeight: true
-                        TextField { Layout.fillWidth: true; placeholderText: "Search history"; onTextChanged: { window.historyFilter = text; window.historyIndex = -1 } }
-                        ComboBox { Layout.fillWidth: true; model: ['All actions'].concat([...new Set(backend.historyEntries.map(entry => entry.action))]); onActivated: { window.actionFilter = currentIndex ? currentText : ''; window.historyIndex = -1 } }
+                        TextField { Layout.fillWidth: true; placeholderText: "Search history"; onTextChanged: { window.historyFilter = text; window.historyId = '' } }
+                        ComboBox { Layout.fillWidth: true; model: ['All actions'].concat([...new Set(backend.historyEntries.map(entry => entry.displayAction))]); onActivated: { window.actionFilter = currentIndex ? currentText : ''; window.historyId = '' } }
                         ListView {
                             Layout.fillWidth: true; Layout.fillHeight: true; model: window.historyRows; spacing: 6; clip: true
-                            delegate: ItemDelegate { required property var modelData; required property int index; width: ListView.view.width; height: 72; highlighted: window.historyIndex === index; onClicked: window.historyIndex = index
-                                contentItem: Column { spacing: 5; Label { text: modelData.action; font.weight: Font.DemiBold } Label { text: modelData.status + ' · ' + new Date(modelData.created * 1000).toLocaleTimeString(); font.pixelSize: 11; opacity: 0.6 } }
+                            delegate: ItemDelegate { required property var modelData; required property int index; width: ListView.view.width; height: 72; highlighted: window.historyId === modelData.id; onClicked: window.historyId = modelData.id
+                                contentItem: Column { spacing: 5; Label { text: modelData.displayAction; font.weight: Font.DemiBold } Label { text: modelData.status + ' · ' + new Date(modelData.created * 1000).toLocaleTimeString(); font.pixelSize: 11; opacity: 0.6 } }
                             }
                         }
                         Button { text: "Clear history…"; enabled: !backend.busy; onClicked: clearDialog.open() }

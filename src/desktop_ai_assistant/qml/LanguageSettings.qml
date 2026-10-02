@@ -22,15 +22,20 @@ ScrollView {
                     Label { text: 'AI provider'; Layout.fillWidth: true }
                     ComboBox { model: ['claude', 'codex']; currentIndex: model.indexOf(languages.draft.provider); onActivated: { languages.draft.provider = currentText; languages.commit() } }
                 }
-                Label { text: 'Fix English translates Czech or mixed text into English. Opravit češtinu produces corrected Czech.'; Layout.fillWidth: true; wrapMode: Text.WordWrap; opacity: 0.7 }
+                RowLayout {
+                    Label { text: 'Native language'; Layout.fillWidth: true }
+                    ComboBox { objectName: 'nativeLanguage'; implicitContentWidthPolicy: ComboBox.WidestText; model: backend.languages; textRole: 'name'; valueRole: 'code'; currentIndex: model.findIndex(l => l.code === languages.draft.nativeLanguage); onActivated: { languages.draft.nativeLanguage = currentValue; languages.commit() } }
+                }
+                Label { text: 'Fix EN translates any text into English or corrects it. ' + backend.previewAction('native', JSON.stringify(languages.draft)).title + ' does the same for your native language.'; Layout.fillWidth: true; wrapMode: Text.WordWrap; opacity: 0.7 }
                 CheckBox { text: 'Keep social English lowercase'; checked: languages.draft.socialLowercase; onToggled: { languages.draft.socialLowercase = checked; languages.commit() } }
             }
         }
         Repeater {
-            model: [{id: 'english_formal', name: 'Fix English · Formal', description: 'Professional wording, grammar and capitalization.'}, {id: 'english_social', name: 'Fix English · Social', description: 'Natural chat wording while preserving tone and emoji.'}, {id: 'czech', name: 'Opravit češtinu', description: 'Czech grammar, diacritics and punctuation.'}]
+            model: [{id: 'english_formal', description: 'Professional wording, grammar and capitalization.'}, {id: 'english_social', description: 'Natural chat wording while preserving tone and emoji.'}, {id: 'native', description: 'Corrects text in your native language or translates into it.'}, {id: 'translate', description: 'Extra instructions for translations shown in the reader.'}]
             delegate: GroupBox {
                 required property var modelData
-                title: modelData.name; Layout.fillWidth: true
+                objectName: 'ruleBox_' + modelData.id
+                title: backend.previewAction(modelData.id, JSON.stringify(languages.draft)).title; Layout.fillWidth: true
                 contentItem: ColumnLayout {
                     spacing: 8
                     Label { text: modelData.description; opacity: 0.7; Layout.fillWidth: true; wrapMode: Text.WordWrap }

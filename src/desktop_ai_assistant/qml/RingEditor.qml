@@ -17,7 +17,7 @@ RowLayout {
     readonly property var selected: backend.previewAction(action, JSON.stringify(draft))
     readonly property var folder: folderPath.length ? draft.folders.find(f => f.id === folderPath[folderPath.length - 1]) : null
     readonly property var shownChildren: folder ? folder.actions.map(a => backend.previewAction(a, JSON.stringify(draft))) : backend.previewChildren(action, JSON.stringify(draft))
-    readonly property var choices: backend.catalog.map(a => ({id: a.id, name: a.id === 'english_formal' ? 'English · Formal' : a.id === 'english_social' ? 'English · Social' : a.name + (['english', 'macros', 'application', 'system'].includes(a.id) ? ' (submenu)' : '')})).concat(draft.macros.map(m => ({id: 'macro:' + m.id, name: m.name + ' (macro)'})), draft.folders.map(f => ({id: 'folder:' + f.id, name: f.name + ' (submenu)'})))
+    readonly property var choices: backend.previewCatalog(JSON.stringify(draft)).map(a => ({id: a.id, name: a.name + (a.group ? ' (submenu)' : '')})).concat(draft.macros.map(m => ({id: 'macro:' + m.id, name: m.name + ' (macro)'})), draft.folders.map(f => ({id: 'folder:' + f.id, name: f.name + ' (submenu)'})))
     spacing: 20
 
     function commit() { edited(JSON.parse(JSON.stringify(draft))) }

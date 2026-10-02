@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,17 @@ import tempfile
 import time
 import psutil
 from .config import data_dir
-from .text import SCHEMA, prompt, validate_result
+from .text import IMAGE_SCHEMA, SCHEMA, prompt, question_prompt, translation_prompt, validate_answer, validate_result, validate_translation
+
+
+CLAUDE_ARGS = ["-p", "--tools", "", "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+               "--permission-mode", "dontAsk", "--permission-prompts", "none", "--no-chrome"]
+CODEX_ARGS = ["--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only", "--json",
+              "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
+              "--disable", "shell_tool", "--disable", "hooks", "--disable", "plugins", "--disable", "multi_agent",
+              "--disable", "apps", "--disable", "unified_exec", "--disable", "multi_agent_v2",
+              "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "in_app_browser",
+              "--disable", "image_generation", "--disable", "view_image", "--disable", "skill_search"]
 
 
 class Cancelled(Exception):
@@ -82,49 +93,81 @@ def provider_env(name):
     return env
 
 
-def transform(config, action, text, cancel):
+def invoke(config, request, schema, cancel, image=None, timeout=90):
     provider = config["provider"]
     jobs = data_dir() / "jobs"
     jobs.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="job-", dir=jobs) as folder:
-        args = command(provider)
-        model = config["models"][provider]
+    with tempfile.TemporaryDirectory(prefix="job-", dir=jobs, ignore_cleanup_errors=True) as folder:
+        args, stdin = command(provider), request
         if provider == "claude":
-            args += ["-p", "--output-format", "json", "--json-schema", json.dumps(SCHEMA), "--tools", "", "--safe-mode",
-                     "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                     "--permission-mode", "dontAsk", "--permission-prompts", "none", "--no-chrome"]
+            args += CLAUDE_ARGS + ["--json-schema", json.dumps(schema)]
+            if image is None:
+                args += ["--output-format", "json"]
+            else:
+                # The CLI takes images only as stream-json content blocks, and that input requires stream-json output.
+                args += ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+                stdin = json.dumps({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(image).decode()}},
+                    {"type": "text", "text": request}]}}) + "\n"
         elif provider == "codex":
-            schema = Path(folder) / "schema.json"
-            schema.write_text(json.dumps(SCHEMA), "utf-8")
-            args += ["exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
-                     "--sandbox", "read-only", "--json", "--output-schema", str(schema),
-                     "-c", 'approval_policy="never"', "-c", 'web_search="disabled"',
-                     "--disable", "shell_tool", "--disable", "hooks", "--disable", "plugins", "--disable", "multi_agent",
-                     "--disable", "apps", "--disable", "unified_exec", "--disable", "multi_agent_v2",
-                     "--disable", "browser_use", "--disable", "browser_use_external", "--disable", "in_app_browser",
-                     "--disable", "image_generation", "--disable", "view_image", "--disable", "skill_search"]
+            schema_file = Path(folder) / "schema.json"
+            schema_file.write_text(json.dumps(schema), "utf-8")
+            args += ["exec"]
+            if image is not None:
+                png = Path(folder) / "source.png"
+                png.write_bytes(image)
+                # -i takes several values, so an option must follow it, never the "-" prompt marker.
+                args += ["-i", str(png)]
+            args += CODEX_ARGS + ["--output-schema", str(schema_file)]
         else:
             raise ValueError("Unknown provider")
-        if model:
-            args += ["--model", model]
+        if config["models"][provider]:
+            args += ["--model", config["models"][provider]]
         if provider == "codex":
             args += ["-"]
-        output = run_process(args, cancel, folder, provider_env(provider), prompt(action, text, config["socialLowercase"], config["rules"][action]))
-        if provider == "claude":
+        output = run_process(args, cancel, folder, provider_env(provider), stdin, timeout)
+    if provider == "claude":
+        if image is None:
             envelope = json.loads(output)
-            if envelope.get("is_error") or envelope.get("subtype") != "success":
-                raise RuntimeError("Claude did not complete successfully: " + str(envelope.get("result", ""))[:500])
-            result = envelope.get("structured_output")
-            if result is None:
-                result = json.loads(envelope["result"])
-        elif provider == "codex":
-            events = [json.loads(line) for line in output.splitlines() if line.strip()]
-            if not any(x.get("type") == "turn.completed" for x in events) or any(x.get("type") in ("error", "turn.failed") for x in events):
-                raise RuntimeError("Codex did not complete successfully")
-            messages = [x["item"]["text"] for x in events if x.get("type") == "item.completed" and x.get("item", {}).get("type") == "agent_message"]
-            if not messages:
-                raise ValueError("Codex returned no final text")
-            result = json.loads(messages[-1])
         else:
-            raise ValueError("Unknown provider")
-        return validate_result(text, result)
+            events = [json.loads(line) for line in output.splitlines() if line.strip()]
+            envelope = next((x for x in reversed(events) if x.get("type") == "result"), None)
+            if envelope is None:
+                raise RuntimeError("Claude returned no result")
+        if envelope.get("is_error") or envelope.get("subtype") != "success":
+            raise RuntimeError("Claude did not complete successfully: " + str(envelope.get("result", ""))[:500])
+        result = envelope.get("structured_output")
+        return json.loads(envelope["result"]) if result is None else result
+    elif provider == "codex":
+        events = [json.loads(line) for line in output.splitlines() if line.strip()]
+        if not any(x.get("type") == "turn.completed" for x in events) or any(x.get("type") in ("error", "turn.failed") for x in events):
+            raise RuntimeError("Codex did not complete successfully")
+        messages = [x["item"]["text"] for x in events if x.get("type") == "item.completed" and x.get("item", {}).get("type") == "agent_message"]
+        if not messages:
+            raise ValueError("Codex returned no final text")
+        return json.loads(messages[-1])
+    else:
+        raise ValueError("Unknown provider")
+
+
+def transform(config, action, text, cancel):
+    request = prompt(action, text, config["nativeLanguage"], config["socialLowercase"], config["rules"][action])
+    return validate_result(text, invoke(config, request, SCHEMA, cancel))
+
+
+def translate(config, source, cancel):
+    request = translation_prompt(config["nativeLanguage"], source["format"], source["text"], config["rules"]["translate"])
+    schema = IMAGE_SCHEMA if source["format"] == "image" else SCHEMA
+    return validate_translation(source, invoke(config, request, schema, cancel, source["image"], timeout=180))
+
+
+
+def answer(config, source, translation, conversation, question, cancel):
+    request = question_prompt(config["nativeLanguage"], source, translation, conversation, question)
+    return validate_answer(invoke(config, request, SCHEMA, cancel, timeout=180))
+
+
+def clean_jobs():
+    # Called at start under the single-instance lock, so no job folder is in use; a crash can leave a region PNG behind.
+    for folder in (data_dir() / "jobs").glob("job-*"):
+        shutil.rmtree(folder, ignore_errors=True)

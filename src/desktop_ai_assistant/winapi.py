@@ -13,6 +13,10 @@ user32.RegisterHotKey.argtypes = [W.HWND, C.c_int, W.UINT, W.UINT]
 user32.UnregisterHotKey.argtypes = [W.HWND, C.c_int]
 user32.GetAsyncKeyState.argtypes = [C.c_int]
 user32.GetAsyncKeyState.restype = C.c_short
+user32.WindowFromPoint.argtypes = [W.POINT]
+user32.WindowFromPoint.restype = W.HWND
+user32.GetAncestor.argtypes = [W.HWND, W.UINT]
+user32.GetAncestor.restype = W.HWND
 INPUT_MARKER = 0x44414941
 
 MODS = {"alt": 1, "ctrl": 2, "shift": 4, "win": 8}
@@ -38,6 +42,13 @@ def foreground():
     _, pid = win32process.GetWindowThreadProcessId(hwnd)
     process = psutil.Process(pid)
     return {"hwnd": hwnd, "pid": pid, "started": process.create_time(), "process": process.name(), "title": win32gui.GetWindowText(hwnd)}
+
+
+def window_at_cursor():
+    point = W.POINT()
+    user32.GetCursorPos(C.byref(point))
+    # Fully transparent pixels of a layered window pass the hit test to the window below.
+    return int(user32.GetAncestor(user32.WindowFromPoint(point), 2) or 0)
 
 
 def same_target(target):
@@ -78,14 +89,25 @@ user32.SendInput.argtypes = [W.UINT, C.POINTER(Input), C.c_int]
 user32.SendInput.restype = W.UINT
 
 
+def held_modifiers():
+    return any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in (16, 17, 18, 91, 92))
+
+
+def wait_modifiers(timeout=1.5):
+    deadline = time.monotonic() + timeout
+    while held_modifiers():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Release modifier keys before running the action")
+        time.sleep(0.02)
+
+
 def send_keys(text, target):
     if not same_target(target):
         raise RuntimeError("The active window changed")
     mods, key = parse_key(text)
     modifier_keys = [vk for flag, vk in ((1, 18), (2, 17), (4, 16), (8, 91)) if mods & flag]
-    for vk in (16, 17, 18, 91, 92):
-        if user32.GetAsyncKeyState(vk) & 0x8000:
-            raise RuntimeError("Release modifier keys before running the action")
+    if held_modifiers():
+        raise RuntimeError("Release modifier keys before running the action")
     keys = modifier_keys + [key]
     events = [Input(1, InputUnion(ki=KeyboardInput(vk, 0, 0, 0, INPUT_MARKER))) for vk in keys]
     events += [Input(1, InputUnion(ki=KeyboardInput(vk, 0, 2, 0, INPUT_MARKER))) for vk in reversed(keys)]

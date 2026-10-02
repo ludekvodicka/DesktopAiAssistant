@@ -1,10 +1,13 @@
+import html
 import os
 from pathlib import Path
 import threading
 from urllib.parse import urlparse
 import win32gui
 from . import providers
+from .text import TAGS
 from .winapi import same_target, target_exists, send_keys, activate
+from .windows_text import terminal
 
 
 class Engine:
@@ -36,6 +39,18 @@ class Engine:
             return self.browser.capture(target)
         return self.windows.capture(target)
 
+    def read_selection(self, target):
+        if terminal(target):
+            raise RuntimeError("Terminal text is not supported")
+        try:
+            snapshot = self.capture(target)
+        except RuntimeError:
+            if not same_target(target):
+                raise
+            return self.windows.copy_selection(target)
+        text = html.unescape(TAGS.sub("", snapshot["text"])) if snapshot.get("rich") else snapshot["text"]
+        return {"kind": "selection", "format": "plain", "text": text, "image": None, "origin": target["process"]}
+
     def apply(self, snapshot, text, tick):
         if self.cancel.is_set():
             raise providers.Cancelled("Cancelled")
@@ -65,7 +80,7 @@ class Engine:
             snapshot["end"] = snapshot.get("selectionEnd", snapshot.get("end", 0))
             snapshot["insert"] = True
         job = self.history.create({"action": action, "source": target["process"], "original": snapshot["text"], "snapshot": snapshot,
-                                   "provider": self.config.value["provider"], "rulesVersion": 1,
+                                   "provider": self.config.value["provider"], "rulesVersion": 1, "language": self.config.value["nativeLanguage"],
                                    "rules": self.config.value["rules"].get(action, ""), "model": self.config.value["models"][self.config.value["provider"]]})
         try:
             if literal is None:

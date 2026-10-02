@@ -12,6 +12,7 @@ class KeyboardEvent(C.Structure):
 
 class InputMonitor:
     revision: object
+    clicks: object
     thread: threading.Thread
     ready: threading.Event
     thread_id: int
@@ -19,6 +20,7 @@ class InputMonitor:
 
     def __init__(self):
         self.revision = mp.Value(C.c_uint64, 0, lock=False)
+        self.clicks = mp.Value(C.c_uint64, 0, lock=False)
         self.ready = threading.Event()
         self.thread_id = 0
         self.error = None
@@ -58,6 +60,8 @@ class InputMonitor:
             # Movement and the release of the activation click do not change an editor.
             if code >= 0 and message in (0x0201, 0x0204, 0x0207, 0x020b, 0x020a, 0x020e):
                 self.revision.value += 1
+            if code >= 0 and message in (0x0201, 0x0204, 0x0207, 0x020b):
+                self.clicks.value += 1
             return user32.CallNextHookEx(None, code, message, data)
 
         try:

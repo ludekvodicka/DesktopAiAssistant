@@ -9,7 +9,9 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 import desktop_ai_assistant
 from desktop_ai_assistant.config import DEFAULT, Config, validate
+from desktop_ai_assistant import controller
 from desktop_ai_assistant.controller import Controller
+from desktop_ai_assistant.updates import Updates
 from test_settings_layout import named_item
 
 
@@ -19,10 +21,10 @@ def test_folders_validate_references_cycles_and_migrate_old_appearance():
     value.pop("folders")
     value.pop("slotAppearance")
     migrated = validate(value)
-    assert migrated["version"] == 4
+    assert migrated["version"] == 5
     assert migrated["appearance"] == value["appearance"]
     assert migrated["slots"] == value["slots"]
-    migrated["folders"] = [{"id": "one", "name": "One", "actions": ["folder:two"]}, {"id": "two", "name": "Two", "actions": ["czech"]}]
+    migrated["folders"] = [{"id": "one", "name": "One", "actions": ["folder:two"]}, {"id": "two", "name": "Two", "actions": ["native"]}]
     migrated["slots"][2] = "folder:one"
     assert validate(migrated)
     migrated["folders"][1]["actions"] = ["folder:one"]
@@ -31,6 +33,97 @@ def test_folders_validate_references_cycles_and_migrate_old_appearance():
     migrated["folders"][1]["actions"] = ["folder:missing"]
     with pytest.raises(ValueError, match="Unknown submenu"):
         validate(migrated)
+
+
+
+def test_labels_follow_native_language_without_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12")
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    monkeypatch.setattr(backend, "set_autostart", lambda enabled: None)
+    try:
+        assert [x["name"] for x in backend.menu[1:4]] == ["Fix EN", "Translate to CZ", "Fix CZ"]
+        assert backend.menu[2]["group"] and not backend.menu[3]["group"]
+        backend.hover(1)
+        assert [(x["name"], x["title"]) for x in backend.children] == [("Formal", "Fix EN · Formal"), ("Social", "Fix EN · Social")]
+        backend.hover(2)
+        assert [x["name"] for x in backend.children] == ["Selection", "Region", "Clipboard"]
+        assert backend.children[0]["title"] == "Translate to CZ · from selection"
+        draft = copy.deepcopy(backend.config.value)
+        draft["nativeLanguage"] = "de"
+        assert [x["name"] for x in backend.previewMenu(json.dumps(draft))[1:4]] == ["Fix EN", "Translate to DE", "Fix DE"]
+        assert backend.menu[3]["name"] == "Fix CZ"
+        draft["nativeLanguage"] = "sk"
+        assert backend.saveSettings(json.dumps(draft))
+        assert [x["name"] for x in backend.menu[2:4]] == ["Translate to SK", "Fix SK"]
+        draft["appearance"] = {"native": {"name": "Opravit"}}
+        assert backend.previewMenu(json.dumps(draft))[3]["name"] == "Opravit"
+        assert backend.saveSettings(json.dumps(draft))
+        assert backend.menu[3]["name"] == "Opravit"
+    finally:
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)
+
+def test_ring_limits_while_own_window_is_in_front_or_an_action_runs(tmp_path, monkeypatch):
+    import os
+    from desktop_ai_assistant import controller as controller_module
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12", bindings=[{"key": "Ctrl+Alt+Shift+F9", "action": "translate_selection", "profile": ""}])
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    front = {"hwnd": 1, "pid": os.getpid(), "started": 0, "process": "python.exe", "title": ""}
+    monkeypatch.setattr(controller_module, "foreground", lambda: dict(front))
+    started, menus = [], []
+    monkeypatch.setattr(backend.translator, "start", lambda kind, target: started.append((kind, target["process"])))
+    backend.requestMenu.connect(lambda: menus.append(True))
+
+    def enabled(slot):
+        backend.hover(slot)
+        return [x["enabled"] for x in backend.children]
+
+    try:
+        backend.hotkey("Ctrl+Alt+F11")
+        assert len(menus) == 1
+        assert {x["id"]: x["enabled"] for x in backend.menu} == {"macros": True, "english": True, "translate": True, "native": False,
+                                                                 "system": True, "": False, "application": False}
+        assert enabled(2) == [False, True, True]
+        assert enabled(4) == [True, True, True]
+        assert enabled(1) == [False, False]
+        assert enabled(0) == [False, False]
+        draft = json.dumps(backend.config.value)
+        assert all(x["enabled"] for x in backend.previewChildren("translate", draft) + backend.previewChildren("english", draft))
+        assert backend.previewMenu(draft)[3]["enabled"]
+        backend.hotkey("Ctrl+Alt+Shift+F9")
+        QTest.qWait(300)
+        assert backend.status == "This shortcut is not available while an assistant window is active"
+        assert started == []
+        front.update(pid=1, process="notepad.exe")
+        backend._busy = True
+        backend.hotkey("Ctrl+Alt+F11")
+        assert len(menus) == 2
+        assert {x["id"]: x["enabled"] for x in backend.menu}["native"] is False
+        assert enabled(2) == [True, True, True]
+        assert enabled(4) == [True, True, False]
+        assert enabled(1) == [False, False]
+        assert enabled(0) == [False, False]
+        assert not backend.action_item("jamat_new")["enabled"]
+        backend.hotkey("Ctrl+Alt+Shift+F9")
+        QTest.qWait(300)
+        assert started == [("selection", "notepad.exe")]
+        backend._busy = False
+        backend.hotkey("Ctrl+Alt+F11")
+        assert enabled(1) == [True, True] and backend.action_item("jamat_new")["enabled"]
+    finally:
+        backend._busy = False
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)
 
 
 def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
@@ -46,6 +139,7 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
     warnings = []
     qml.warnings.connect(lambda items: warnings.extend(str(item) for item in items))
     qml.rootContext().setContextProperty("backend", backend)
+    qml.rootContext().setContextProperty("updates", Updates.create(app, busy=lambda: False))
     qml.load(QUrl.fromLocalFile(str(Path(desktop_ai_assistant.__file__).parent / "qml/Settings.qml")))
     window = qml.rootObjects()[0]
 
@@ -69,6 +163,9 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         QTest.qWait(500)
         editor = named_item(window.contentItem(), "ringEditor")
         ring = named_item(window.contentItem(), "editorRing")
+        choices = editor.property("choices").toVariant()
+        assert {"id": "translate", "name": "Translate to CZ (submenu)"} in choices
+        assert {"id": "english_formal", "name": "Fix EN · Formal"} in choices
         click(ring, QPointF(412, 300))
         assert editor.property("selectedSlot") == 2
         picker = window.findChild(QObject, "actionPicker")
@@ -79,7 +176,7 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         draft = window.property("draft").toVariant()
         folder_id = draft["folders"][0]["id"]
         assert draft["slots"][2] == "folder:" + folder_id
-        assert backend.config.value["slots"][2] == "", "Preview must not change live actions"
+        assert backend.config.value["slots"][2] == "translate", "Preview must not change live actions"
         click(named_item(window.contentItem(), "addFolderItem"))
         assert picker.property("visible")
         assert editor.property("pickerFolder") == folder_id
@@ -88,7 +185,7 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         invoke(editor, "createFolder")
         nested = window.property("draft").toVariant()["folders"][1]["id"]
         invoke(editor, "pick", nested, -1)
-        invoke(editor, "assign", "czech")
+        invoke(editor, "assign", "native")
         draft = window.property("draft").toVariant()
         draft["slotAppearance"][2] = {"name": "Writing"}
         assert backend.saveSettings(json.dumps(draft))
@@ -97,7 +194,7 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         backend.hover(2)
         assert [item["id"] for item in backend.children] == ["english_formal", "folder:" + nested]
         backend.enterChild(1)
-        assert backend.children[0]["id"] == "czech"
+        assert backend.children[0]["id"] == "native"
         assert backend.canGoBack
         backend.backFolder()
         assert backend.children[0]["id"] == "english_formal"
@@ -124,3 +221,52 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         app.removeNativeEventFilter(backend.hotkeys)
         import shiboken6
         shiboken6.delete(qml)
+
+
+def test_open_ring_takes_no_navigation_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12")
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    try:
+        registered, executed = [], []
+        monkeypatch.setattr(backend.hotkeys, "configure", registered.append)
+        monkeypatch.setattr(backend, "execute", executed.append)
+        backend.ringVisible(True)
+        backend.hotkey("Enter")
+        backend.hotkey("1")
+        backend.ringVisible(False)
+        assert registered == [] and executed == []
+    finally:
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)
+
+
+def test_click_outside_the_ring_closes_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12")
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    try:
+        hidden, under = [], [7]
+        backend.hideMenu.connect(lambda: hidden.append(True))
+        monkeypatch.setattr(controller, "window_at_cursor", lambda: under[0])
+        backend.ring_window, backend._target = 7, {}
+        backend.ringVisible(True)
+        backend.watch()
+        backend.windows.input_monitor.clicks.value += 1
+        backend.watch()
+        assert hidden == []
+        under[0] = 9
+        backend.windows.input_monitor.clicks.value += 1
+        backend.watch()
+        assert hidden == [True]
+    finally:
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)

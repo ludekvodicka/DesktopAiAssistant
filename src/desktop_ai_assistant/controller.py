@@ -12,18 +12,36 @@ import winreg
 from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QDesktopServices
 from PySide6.QtWidgets import QFileDialog
-from .config import Config, DEFAULT, validate, data_dir
+from .config import Config, DEFAULT, EDITS, GROUPS, TRANSLATIONS, validate, data_dir
 from .history import History
 from .windows_text import WindowsText
 from .bridge import BrowserBridge
 from .engine import Engine
 from .geometry import ring_geometry, sector, point
-from .winapi import Hotkeys, foreground, same_target, parse_key, user32
-from .providers import command, provider_env, run_process
+from .winapi import Hotkeys, foreground, same_target, parse_key, user32, window_at_cursor
+from .providers import clean_jobs, command, provider_env, run_process
+from .translation import Translator
+from .text import LANGUAGES, SOURCES
 
-LABELS = {"english": "English", "english_formal": "Formal", "english_social": "Social", "czech": "Čeština",
+LABELS = {"english": "Fix EN", "english_formal": "Formal", "english_social": "Social",
+          "translate_selection": "Selection", "translate_region": "Region", "translate_clipboard": "Clipboard",
           "macros": "Macros", "application": "Application", "system": "System", "history": "History", "settings": "Open config", "restart": "Restart app", "jamat_new": "New session", "jamat_remarkable": "Read reMarkable"}
-ICONS = {"english": "Aa", "english_formal": "Aa", "english_social": "hi", "czech": "Čž", "macros": "⌘", "application": "▦", "system": "⚙", "history": "↶", "settings": "⚙", "restart": "↻", "jamat_new": "+", "jamat_remarkable": "▤"}
+TITLES = {"english_formal": "Fix EN · Formal", "english_social": "Fix EN · Social"}
+ICONS = {"english": "Aa", "english_formal": "Aa", "english_social": "hi", "translate": "⇄", "translate_selection": "¶", "translate_region": "⬚", "translate_clipboard": "⎘",
+         "macros": "⌘", "application": "▦", "system": "⚙", "history": "↶", "settings": "⚙", "restart": "↻", "jamat_new": "+", "jamat_remarkable": "▤"}
+CATALOG = ["english", "english_formal", "english_social", "native", "translate", *TRANSLATIONS, "macros",
+           "application", "system", "history", "settings", "restart", "jamat_new", "jamat_remarkable"]
+
+
+def names(action, value):
+    short, _, icon = LANGUAGES[value["nativeLanguage"]]
+    if action == "native":
+        return "Fix " + short, "Fix " + short, icon
+    if action == "translate":
+        return "Translate to " + short, "Translate to " + short, ICONS[action]
+    if action in TRANSLATIONS:
+        return LABELS[action], f"Translate to {short} · {SOURCES[action.removeprefix('translate_')]}", ICONS[action]
+    return LABELS.get(action, action), TITLES.get(action, LABELS.get(action, action)), ICONS.get(action, "›")
 
 
 class Controller(QObject):
@@ -34,17 +52,18 @@ class Controller(QObject):
     requestSettings = Signal(str)
     requestRestart = Signal()
     hideMenu = Signal()
-    navigationChanged = Signal(int, int)
     config: Config
     history: History
     windows: WindowsText
     browser: BrowserBridge
     engine: Engine
+    translator: Translator
     hotkeys: Hotkeys
     _status: str
     _browser_status: str
     _busy: bool
     _target: dict
+    _limit: str
     _profile: dict | None
     _menu: list
     _children: list
@@ -55,26 +74,29 @@ class Controller(QObject):
     _pending_restore: str
     _paused: bool
     _ring_visible: bool
-    _keyboard_index: int
-    _keyboard_child: int
+    _ring_clicks: int
+    ring_window: int
     thread: threading.Thread | None
     monitor: QTimer
 
     def __init__(self, app):
         super().__init__()
         self.config = Config()
+        clean_jobs()
         self.history = History()
         self.history.prune(self.config.value["historyDays"])
         self.windows = WindowsText()
         self.browser = BrowserBridge()
         self.engine = Engine(self.config, self.history, self.windows, self.browser, self.notification.emit)
+        self.translator = Translator(self.config, self.history, self.engine.read_selection)
+        self.translator.ended.connect(self.refresh)
         self.hotkeys = Hotkeys(self.hotkey)
         app.installNativeEventFilter(self.hotkeys)
-        self._status, self._busy, self._target, self._profile = "Ready", False, {}, None
+        self._status, self._busy, self._target, self._limit, self._profile = "Ready", False, {}, "", None
         self._menu, self._children, self._history = [], [], []
         self._folder_path = []
         self._parent, self._armed, self._pending_restore, self._paused = -1, "", "", False
-        self._ring_visible, self._keyboard_index, self._keyboard_child = False, 0, -1
+        self._ring_visible, self._ring_clicks, self.ring_window = False, 0, 0
         self.thread = None
         self._browser_status = "Browser integration has not been prepared yet."
         self.notification.connect(self.set_status)
@@ -123,8 +145,8 @@ class Controller(QObject):
         return self._profile["name"] if self._profile else self._target.get("process", "Desktop")
 
     @Property('QVariantList', constant=True)
-    def catalog(self):
-        return [{"id": "", "name": "Empty"}] + [{"id": k, "name": v} for k, v in LABELS.items()]
+    def languages(self):
+        return [{"code": code, "name": f"{name} ({short})"} for code, (short, name, _) in LANGUAGES.items()]
 
     @Property(str, constant=True)
     def dataPath(self):
@@ -140,7 +162,9 @@ class Controller(QObject):
         import html
         for entry in self._history:
             entry["displayOriginal"] = html.unescape(re.sub(r"</?t\d+>|<o\d+/>", "", entry.get("original", "")))
-            entry["displayResult"] = html.unescape(re.sub(r"</?t\d+>|<o\d+/>", "", entry.get("result", "")))
+            entry["displayResult"] = html.unescape(re.sub(r"</?t\d+>|<o\d+/>", "", entry.get("result", ""))) + "".join(
+                f"\n\nQ: {x['question']}\nA: {x['answer']}" for x in entry.get("conversation", []))
+            entry["displayAction"] = names(entry["action"], self.config.value)[1] if entry["action"] in CATALOG else entry["action"]
         self._menu = []
         for index, action in enumerate(self.config.value["slots"]):
             item = self.action_item(action)
@@ -150,26 +174,42 @@ class Controller(QObject):
         self.changed.emit()
 
     def action_item(self, action, value=None):
-        value = self.config.value if value is None else value
-        name, icon = LABELS.get(action, action), ICONS.get(action, "›")
+        live = value is None
+        value = self.config.value if live else value
+        name, title, icon = names(action, value)
         if action.startswith("macro:"):
-            name = next((x["name"] for x in value["macros"] if "macro:" + x["id"] == action), "Macro")
+            name = title = next((x["name"] for x in value["macros"] if "macro:" + x["id"] == action), "Macro")
             icon = "⌘"
         if action.startswith("folder:"):
             folder = next((x for x in value["folders"] if "folder:" + x["id"] == action), {})
             name, icon = folder.get("name", "Submenu"), folder.get("icon") or "▦"
+            title = name
         if action == "application" and self._profile:
-            name = self._profile["name"]
+            name = title = self._profile["name"]
         appearance = value["appearance"].get(action, {})
         name = appearance.get("name") or name
         icon = appearance.get("icon") or icon
-        enabled = bool(action) and action != "jamat_remarkable" and (action != "application" or self._profile is not None)
-        return {"id": action, "name": name, "icon": icon, "enabled": enabled, "group": action in ("english", "macros", "application", "system") or action.startswith("folder:")}
+        group = action in GROUPS or action.startswith("folder:")
+        enabled = bool(action) and action != "jamat_remarkable" and (action != "application" or self._profile is not None) \
+            and (group or not live or self.available(action))
+        return {"id": action, "name": name, "title": title, "icon": icon, "enabled": enabled, "group": group}
+
+    def available(self, action):
+        if self._limit == "":
+            return True
+        elif self._limit == "own":
+            return action in ("translate_region", "translate_clipboard", "settings", "history", "restart")
+        elif self._limit == "busy":
+            return action in TRANSLATIONS + ("settings", "history")
+        else:
+            raise ValueError("Unknown ring limit")
 
     def group_actions(self, action, value=None):
         value = self.config.value if value is None else value
         if action == "english":
             return ["english_formal", "english_social"]
+        elif action == "translate":
+            return list(TRANSLATIONS)
         elif action == "macros":
             return ["macro:" + x["id"] for x in value["macros"]][:6]
         elif action == "application":
@@ -211,6 +251,7 @@ class Controller(QObject):
     @Slot(str)
     def job_finished(self, error):
         self._busy = False
+        self._limit = "" if self._limit == "busy" else self._limit
         self.engine.edit_target = None
         if error:
             self._status = error
@@ -240,23 +281,19 @@ class Controller(QObject):
         if self._ring_visible and parse_key(key) == parse_key(self.config.value["hotkey"]):
             self.hideMenu.emit()
             return
-        if self._ring_visible and key in ([str(i) for i in range(1, 9)] + ["Left", "Right", "Up", "Down", "Enter", "Escape"]):
-            self.navigate(key)
-            return
         if self._paused:
             return
         try:
             self._target = foreground()
-            if self._target["pid"] == os.getpid():
-                self.set_status("Focus the application you want to edit first")
-                return
-            self._profile = next((x for x in self.config.value["profiles"] if x["process"].lower() == self._target["process"].lower()), None)
-            if self._pending_restore:
+            own = self._target["pid"] == os.getpid()
+            self._limit = "own" if own else "busy" if self._busy else ""
+            self._profile = None if own else next((x for x in self.config.value["profiles"] if x["process"].lower() == self._target["process"].lower()), None)
+            if self._pending_restore and not own:
                 job = self._pending_restore
                 self._pending_restore = ""
                 self.work(lambda: self.engine.restore(job))
                 return
-            if self._armed:
+            if self._armed and not own:
                 action = self._armed
                 self._armed = ""
                 QTimer.singleShot(180, lambda: self.execute(action))
@@ -269,8 +306,10 @@ class Controller(QObject):
                 candidates = [x for x in self.config.value["bindings"] if parse_key(x["key"]) == parse_key(key)]
                 selected = next((x for x in candidates if self._profile and x.get("profile") == self._profile["id"]), None)
                 selected = selected or next((x for x in candidates if not x.get("profile")), None)
-                if selected:
+                if selected and self.available(selected["action"]):
                     QTimer.singleShot(180, lambda: self.execute(selected["action"]))
+                elif selected:
+                    self.set_status("This shortcut is not available while " + ("an assistant window is active" if own else "another action runs"))
         except Exception as error:
             self.set_status(str(error))
 
@@ -304,54 +343,17 @@ class Controller(QObject):
             action = self._children[index]["id"]
             self._folder_path.append(action)
             self.render_children(action)
-            self._keyboard_child = -1
-            self.navigationChanged.emit(self._keyboard_index, -1)
 
     @Slot()
     def backFolder(self):
         if self._folder_path:
             self._folder_path.pop()
             self.render_children(self._folder_path[-1] if self._folder_path else self._menu[self._parent]["id"])
-            self._keyboard_child = -1
-            self.navigationChanged.emit(self._keyboard_index, -1)
 
     @Slot(bool)
     def ringVisible(self, visible):
         self._ring_visible = visible
-        keys = [self.config.value["hotkey"], self.config.value["stopHotkey"]] + [x["key"] for x in self.config.value["bindings"]]
-        if visible:
-            keys += [str(i) for i in range(1, 9)] + ["Left", "Right", "Up", "Down", "Enter", "Escape"]
-            self._keyboard_index, self._keyboard_child = 0, -1
-        try:
-            self.hotkeys.configure(keys)
-        except ValueError as error:
-            self.set_status(str(error))
-
-    def navigate(self, key):
-        if key == "Escape":
-            self.hideMenu.emit()
-            return
-        elif key in ("Left", "Right") or key.isdigit():
-            self._keyboard_index = int(key) - 1 if key.isdigit() else (self._keyboard_index + (1 if key == "Right" else -1)) % 8
-            self._keyboard_child = -1
-            self.hover(self._keyboard_index)
-        elif key in ("Up", "Down"):
-            if self._children:
-                self._keyboard_child = (self._keyboard_child + (1 if key == "Down" else -1)) % len(self._children)
-        elif key == "Enter":
-            item = self._children[self._keyboard_child] if self._keyboard_child >= 0 and self._children else self._menu[self._keyboard_index]
-            if item["group"]:
-                if self._keyboard_child >= 0:
-                    self.enterChild(self._keyboard_child)
-                else:
-                    self.hover(self._keyboard_index)
-                if self._children:
-                    self._keyboard_child = 0
-            elif item["enabled"]:
-                QTimer.singleShot(160, lambda: self.execute(item["id"]))
-        else:
-            raise ValueError("Unknown navigation key")
-        self.navigationChanged.emit(self._keyboard_index, self._keyboard_child)
+        self._ring_clicks = self.windows.input_monitor.clicks.value
 
     @Slot(str)
     def execute(self, action):
@@ -360,8 +362,10 @@ class Controller(QObject):
             self.requestSettings.emit(action)
         elif action == "restart":
             self.restartApp()
-        elif action in ("english_formal", "english_social", "czech"):
+        elif action in EDITS:
             self.work(lambda: self.engine.edit(action, self._target))
+        elif action in TRANSLATIONS:
+            self.translator.start(action.removeprefix("translate_"), self._target)
         elif action.startswith("macro:"):
             self.work(lambda: self.engine.macro(action[6:], self._target))
         elif action in ("jamat_new", "jamat_remarkable"):
@@ -381,6 +385,7 @@ class Controller(QObject):
     @Slot()
     def cancel(self):
         self.engine.cancel.set()
+        self.translator.stop()
         self.hideMenu.emit()
         self._armed, self._pending_restore = "", ""
         self.set_status("Stopping…" if self._busy else "Ready")
@@ -408,9 +413,11 @@ class Controller(QObject):
 
     @Slot()
     def clearHistory(self):
-        if not self._busy:
-            self.history.clear()
-            self.refresh()
+        if self._busy or self.translator.active:
+            self.set_status("Wait for running actions before clearing History")
+            return
+        self.history.clear()
+        self.refresh()
 
     @Slot(str, result=bool)
     def saveSettings(self, text):
@@ -487,6 +494,12 @@ class Controller(QObject):
     def previewChildren(self, action, text):
         value = json.loads(text)
         return [self.action_item(child, value) for child in self.group_actions(action, value)]
+
+    @Slot(str, result='QVariantList')
+    def previewCatalog(self, text):
+        value = json.loads(text)
+        return [{"id": "", "name": "Empty", "group": False, "edit": False}] + [
+            {"id": a, "name": names(a, value)[1], "group": a in GROUPS, "edit": a in EDITS} for a in CATALOG]
 
     @Slot(bool)
     def captureShortcut(self, active):
@@ -580,12 +593,20 @@ class Controller(QObject):
             self.hideMenu.emit()
         if user32.GetAsyncKeyState(27) & 0x8000:
             self.hideMenu.emit()
+        clicks = self.windows.input_monitor.clicks.value
+        # A click outside the ring shapes never reaches the ring window, so the passive mouse hook reports it.
+        if self._ring_visible and clicks != self._ring_clicks:
+            self._ring_clicks = clicks
+            if window_at_cursor() != self.ring_window:
+                self.hideMenu.emit()
 
     def close(self):
         self.engine.cancel.set()
+        self.translator.stop()
         self.monitor.stop()
         self.hotkeys.close()
         if self.thread and self.thread.is_alive():
             self.thread.join(8)
+        self.translator.close()
         self.windows.close()
         self.browser.close()

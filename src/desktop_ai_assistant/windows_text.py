@@ -6,14 +6,28 @@ import ctypes as C
 from ctypes import wintypes as W
 import pythoncom
 import win32gui
-from .winapi import same_target, target_exists, send_keys
+from .winapi import same_target, target_exists, send_keys, wait_modifiers
 from .input_monitor import InputMonitor
+
+
+TERMINAL_CLASSES = ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "PuTTY", "VirtualConsoleClass")
+
+
+def terminal(target):
+    name = target["process"].lower()
+    if any(x in name for x in ("terminal", "powershell", "pwsh", "cmd.exe", "conhost", "wezterm", "putty", "mintty", "bash", "wsl", "alacritty", "conemu", "tabby", "hyper")):
+        return True
+    # Ctrl+C interrupts a terminal process; the window class also catches terminals with unknown process names.
+    try:
+        return win32gui.GetClassName(target.get("hwnd", 0)) in TERMINAL_CLASSES
+    except win32gui.error:
+        return False
 
 
 def _worker(connection, revision):
     import comtypes
     import comtypes.client
-    from .clipboard import Clipboard
+    from .clipboard import Clipboard, copy_mime_data, source_from_mime
     comtypes.CoInitializeEx(2)
     pythoncom.OleInitialize()
     clipboard = Clipboard()
@@ -207,6 +221,21 @@ def _worker(connection, revision):
                             except Exception:
                                 if verified:
                                     result["clipboardWarning"] = "Text updated, but the previous clipboard could not be restored."
+                elif request["op"] == "copy":
+                    target = request["target"]
+                    if not same_target(target):
+                        raise RuntimeError("The active window changed")
+                    saved, sequence = clipboard.backup()
+                    send_keys("Ctrl+C", target)
+                    copied = clipboard.wait_change(sequence, 2.5)
+                    if copied == sequence:
+                        raise RuntimeError("Nothing was copied. Select text first.")
+                    try:
+                        selection = copy_mime_data(clipboard.clipboard.mimeData())
+                    finally:
+                        clipboard.restore(saved, copied)
+                    # Converted after the restore, so a slow conversion of a large page cannot cost the user's clipboard.
+                    result = source_from_mime(selection, "selection", target["process"], "The copied content has no text")
                 else:
                     raise ValueError("Unknown text operation")
                 connection.send({"ok": True, "value": result})
@@ -283,9 +312,16 @@ class WindowsText:
         name = target["process"].lower()
         if name in ("chrome.exe", "msedge.exe", "firefox.exe"):
             raise RuntimeError("Connect the browser extension to preserve formatting")
-        if any(x in name for x in ("terminal", "powershell", "cmd.exe", "conhost", "wezterm", "putty")):
+        if terminal(target):
             raise RuntimeError("Terminal input is not supported")
         return self.call({"op": "capture", "target": target})
+
+    def copy_selection(self, target):
+        if terminal(target):
+            raise RuntimeError("Terminal text is not supported")
+        # A direct shortcut can still be held; waiting inside the worker would hold the call lock.
+        wait_modifiers()
+        return self.call({"op": "copy", "target": target})
 
     def apply(self, snapshot, text, tick=None, allow_background=False):
         return self.call({"op": "apply", "snapshot": snapshot, "text": text, "tick": tick, "allowBackground": allow_background})

@@ -1,4 +1,5 @@
 import copy
+from types import SimpleNamespace
 import pytest
 from desktop_ai_assistant.engine import Engine
 from desktop_ai_assistant.config import DEFAULT
@@ -9,16 +10,22 @@ from desktop_ai_assistant import engine as engine_module
 class TextField:
     snapshot: dict
     writes: list
+    copies: list
 
     def __init__(self):
         self.snapshot = {"kind": "windows", "target": {"process": "test.exe"}, "text": "helo", "full": "helo", "start": 0, "end": 4}
         self.writes = []
+        self.copies = []
 
     def input_tick(self):
         return 123
 
     def capture(self, target):
         return copy.deepcopy(self.snapshot)
+
+    def copy_selection(self, target):
+        self.copies.append(target)
+        return {"kind": "selection", "format": "markdown", "text": "# copied", "image": None, "origin": target["process"]}
 
     def apply(self, snapshot, text, tick=None, allow_background=False):
         if self.snapshot["full"] != snapshot["full"]:
@@ -184,4 +191,54 @@ def test_failed_write_keeps_result_and_nonempty_error_without_retry(runner, monk
     assert entry["original"] == "helo"
     assert entry["error"] == "EOFError"
     assert len(calls) == 1
+    assert engine.edit_target is None
+
+
+def no_apply(*args, **kwargs):
+    pytest.fail("read_selection must never apply")
+
+
+def test_read_selection_uses_the_adapter_without_copy(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine, "apply", no_apply)
+    assert engine.read_selection({"process": "test.exe"}) == {"kind": "selection", "format": "plain", "text": "helo", "image": None, "origin": "test.exe"}
+    assert field.copies == [] and field.writes == []
+    assert engine.edit_target is None
+    assert history.entries() == []
+
+
+def test_read_selection_copies_when_the_adapter_refuses(runner, monkeypatch):
+    engine, field, history = runner
+    def refuse(target):
+        raise RuntimeError("This field is read-only or protected")
+    monkeypatch.setattr(field, "capture", refuse)
+    monkeypatch.setattr(engine, "apply", no_apply)
+    assert engine.read_selection({"process": "test.exe"})["text"] == "# copied"
+    assert field.copies == [{"process": "test.exe"}]
+    assert field.writes == [] and engine.edit_target is None
+
+
+def test_read_selection_does_not_copy_after_the_target_changed(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine_module, "same_target", lambda target: False)
+    with pytest.raises(RuntimeError, match="no longer active"):
+        engine.read_selection({"process": "test.exe"})
+    assert field.copies == [] and engine.edit_target is None
+
+
+def test_read_selection_refuses_a_terminal_before_capture(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(field, "capture", lambda target: pytest.fail("capture must not run"))
+    with pytest.raises(RuntimeError, match="Terminal text"):
+        engine.read_selection({"process": "powershell.exe"})
+    assert field.copies == []
+
+
+def test_read_selection_strips_gmail_markers(runner, monkeypatch):
+    engine, field, history = runner
+    engine.browser = SimpleNamespace(capture=lambda target: {"kind": "browser", "rich": True, "text": "<t0>Fish &amp; chips</t0><o1/> &lt;3"},
+                                     apply=no_apply)
+    monkeypatch.setattr(engine, "apply", no_apply)
+    source = engine.read_selection({"process": "chrome.exe"})
+    assert source == {"kind": "selection", "format": "plain", "text": "Fish & chips <3", "image": None, "origin": "chrome.exe"}
     assert engine.edit_target is None

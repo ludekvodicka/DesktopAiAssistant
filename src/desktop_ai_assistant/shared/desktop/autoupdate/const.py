@@ -1,0 +1,20 @@
+class UpdateConst:
+    initial_delay_seconds = 45
+    interval_seconds = 120 * 60
+    install_paint_seconds = 0.25
+    progress_interval_seconds = 0.25
+    request_timeout_seconds = 20
+    helper_wait_seconds = 120
+    swap_seconds = 60
+    retry_first_seconds = 0.25
+    retry_longest_seconds = 2.0
+    allowed_hosts = ("github.com",)
+    api_root = "https://api.github.com"
+    checksums_asset = "SHA256SUMS.txt"
+    checksums_limit_bytes = 65536
+    json_limit_bytes = 4 * 1024 * 1024
+    chunk_bytes = 256 * 1024
+    manifest_schema = 1
+    manifest_schemas_readable = (1,)
+    notes_end_marker = "<!-- update-notes-end -->"
+    helper_flag = "--apply-update"

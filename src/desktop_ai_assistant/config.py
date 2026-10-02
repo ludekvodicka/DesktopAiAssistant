@@ -2,6 +2,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from .text import LANGUAGES, RULES
 
 
 def data_dir():
@@ -10,13 +11,18 @@ def data_dir():
     return path
 
 
+EDITS = tuple(RULES)
+TRANSLATIONS = ("translate_selection", "translate_region", "translate_clipboard")
+GROUPS = ("english", "translate", "macros", "application", "system")
+BUILT_IN = {"", "history", "settings", "restart", "jamat_new", "jamat_remarkable", *EDITS, *TRANSLATIONS, *GROUPS}
+
 DEFAULT = {
-    "version": 4, "hotkey": "Ctrl+Alt+Space", "stopHotkey": "Ctrl+Alt+Escape",
+    "version": 5, "hotkey": "Ctrl+Alt+Space", "stopHotkey": "Ctrl+Alt+Escape",
     "provider": "claude", "models": {"claude": "", "codex": ""},
     "theme": "dark", "size": 1.0, "reducedMotion": False, "historyDays": 30,
-    "socialLowercase": True, "autostart": False,
-    "rules": {"english_formal": "", "english_social": "", "czech": ""},
-    "slots": ["macros", "english", "", "czech", "system", "", "application", ""],
+    "socialLowercase": True, "autostart": False, "nativeLanguage": "cs",
+    "rules": {"english_formal": "", "english_social": "", "native": "", "translate": ""},
+    "slots": ["macros", "english", "translate", "native", "system", "", "application", ""],
     "bindings": [],
     "appearance": {},
     "slotAppearance": [{} for _ in range(8)],
@@ -28,13 +34,17 @@ DEFAULT = {
 }
 
 
+def native_id(action):
+    return "native" if action == "czech" else action
+
+
 def validate(value):
-    if not isinstance(value, dict) or value.get("version") not in (1, 2, 3, 4):
+    if not isinstance(value, dict) or value.get("version") not in (1, 2, 3, 4, 5):
         raise ValueError("Unsupported settings version")
     if set(value) - set(DEFAULT):
         raise ValueError("Unknown settings fields")
     result = copy.deepcopy(DEFAULT)
-    result.update(value)
+    result.update(copy.deepcopy(value))
     if result["version"] == 1:
         result["version"] = 2
         result["slots"] = list(result["slots"])
@@ -43,14 +53,35 @@ def validate(value):
             result["slots"][position] = "restart"
     if result["version"] < 4:
         result["slots"] = ["system" if action == "restart" else action for action in result["slots"]]
-    result["version"] = 4
+    if result["version"] < 5:
+        result["slots"] = [native_id(x) for x in result["slots"]]
+        for owner in result["folders"] + result["profiles"]:
+            if isinstance(owner.get("actions"), list):
+                owner["actions"] = [native_id(x) for x in owner["actions"]]
+        for binding in result["bindings"]:
+            binding["action"] = native_id(binding.get("action", ""))
+        for step in (s for m in result["macros"] for s in m.get("steps", []) if s.get("type") == "ai"):
+            step["value"] = native_id(step.get("value"))
+        for key in ("appearance", "rules"):
+            if isinstance(result[key], dict):
+                result[key] = {native_id(k): v for k, v in result[key].items()}
+        # Schema 4 tolerated extra rule keys; schema 5 rejects them, which would stop the app at start.
+        if isinstance(result["rules"], dict):
+            result["rules"] = {k: v for k, v in result["rules"].items() if k in DEFAULT["rules"]}
+        if "translate" not in result["slots"] and "" in result["slots"]:
+            result["slots"][result["slots"].index("")] = "translate"
+    result["version"] = 5
     if result["provider"] not in ("codex", "claude") or result["theme"] not in ("dark", "light", "contrast"):
         raise ValueError("Invalid provider or theme")
     if result["size"] not in (0.85, 1.0, 1.2) or not isinstance(result["historyDays"], int) or not 1 <= result["historyDays"] <= 365:
         raise ValueError("Invalid size or retention")
     if not isinstance(result["models"], dict) or any(not isinstance(result["models"].get(p), str) for p in ("codex", "claude")):
         raise ValueError("Invalid models")
-    if not isinstance(result["rules"], dict) or any(not isinstance(result["rules"].get(p), str) for p in DEFAULT["rules"]):
+    if not isinstance(result["nativeLanguage"], str) or result["nativeLanguage"] not in LANGUAGES:
+        raise ValueError("Unknown native language")
+    if isinstance(result["rules"], dict):
+        result["rules"] = {**DEFAULT["rules"], **result["rules"]}
+    if not isinstance(result["rules"], dict) or set(result["rules"]) != set(DEFAULT["rules"]) or any(not isinstance(x, str) for x in result["rules"].values()):
         raise ValueError("Invalid language rules")
     ids = set()
     for macro in result["macros"]:
@@ -65,7 +96,7 @@ def validate(value):
                 if not isinstance(step.get("value"), (int, float)) or not 0 <= step["value"] <= 60:
                     raise ValueError("Delay must be 0 to 60 seconds")
             elif kind == "ai":
-                if step.get("value") not in DEFAULT["rules"]:
+                if step.get("value") not in EDITS:
                     raise ValueError("Unknown language action")
             elif kind in ("keys", "text", "open", "activate", "app"):
                 if not isinstance(step.get("value"), str) or not step["value"]:
@@ -74,7 +105,7 @@ def validate(value):
                     raise ValueError("Unknown application command")
             else:
                 raise ValueError("Unknown macro step")
-    actions = {"", "english", "english_formal", "english_social", "czech", "macros", "application", "system", "history", "settings", "restart", "jamat_new", "jamat_remarkable"} | {"macro:" + x for x in ids}
+    actions = BUILT_IN | {"macro:" + x for x in ids}
     folders = {}
     for folder in result["folders"]:
         identifier = folder.get("id")
@@ -126,7 +157,7 @@ def validate(value):
     seen = set()
     for binding in result["bindings"]:
         key = (binding.get("profile", ""), binding.get("key", "").lower())
-        if key in seen or not key[1] or binding.get("action") not in actions - {"", "application", "macros", "english", "system"} - set(folders):
+        if key in seen or not key[1] or binding.get("action") not in actions - {""} - set(GROUPS) - set(folders):
             raise ValueError("Invalid or duplicate shortcut")
         if key[0] and key[0] not in profile_ids:
             raise ValueError("Unknown shortcut profile")

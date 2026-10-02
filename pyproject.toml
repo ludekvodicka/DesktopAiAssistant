@@ -25,4 +25,4 @@ where = ["src"]
 desktop_ai_assistant = ["qml/*.qml", "assets/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "src/desktop_ai_assistant/shared"]

@@ -8,11 +8,29 @@ Use **New submenu** to group up to six actions. Submenus may contain other subme
 
 ## Language actions
 
-**Languages** selects the provider, social lowercase output, and rules for each action. **Connections** checks the CLI and provides sign-in controls. Codex uses an app-specific login directory; Claude uses its existing CLI authentication.
+**Languages** selects the provider, your native language, social lowercase output, and rules for each action. **Connections** checks the CLI and provides sign-in controls. Codex uses an app-specific login directory; Claude uses its existing CLI authentication.
 
 ![Language settings with the three built-in writing actions](images/languages.png)
 
-**Formal** and **Social** correct English or translate Czech into the corresponding English style. **Čeština** corrects Czech. Custom rules complement the built-in formatting and protected-literal checks.
+**Fix EN → Formal** and **Fix EN → Social** correct English or translate any language into the corresponding English style. **Fix CZ** corrects text in your native language or translates into it, and keeps the original formality and form of address. Custom rules complement the built-in formatting and protected-literal checks.
+
+The native language can be Czech (CZ, the default), Slovak, Polish, German, English, French, Spanish, Italian, Hungarian, or Ukrainian. The labels **Fix CZ** and **Translate to CZ** use its short code. A language change shows in the editor previews at once and in the ring after Save, without a restart. A custom segment name keeps priority. Settings from earlier versions are migrated once on the first start; earlier versions cannot read the migrated file.
+
+The screenshot above shows the earlier English and Čeština labels.
+
+## Translate
+
+**Translate to CZ** has three actions: **Selection**, **Region**, and **Clipboard**. The group itself takes no shortcut; assign one to each action under **App profiles → Direct action shortcuts**.
+
+- **Selection** reads the selected text in an editor, web page, or application. In a supported editor with no selection, it uses the whole field. When the editor adapters cannot read the content, the app sends Ctrl+C to the window in front, reads the copied formatted or plain text, and restores your previous clipboard if nothing else changed it. The copied selection can still appear in the Windows clipboard history (Win+V). Some applications copy the current line when nothing is selected. Terminals are refused, and elevated windows ignore the keys.
+- **Region** freezes every screen. Drag a rectangle on any screen to translate the text in it. Esc, a right click, the stop shortcut, or a very small drag cancels. The cropped image goes to the AI provider, which reads and translates it; there is no local text recognition.
+- **Clipboard** translates formatted text, plain text, or an image from the clipboard. Files and an empty clipboard are refused.
+
+While the translation runs, the status popup in the bottom-right corner shows its progress and **Stop translation**, like a Fix action. The reader window opens when the translation is ready, sized to the text, and shows the translation with its headings, lists, tables, links, and code. **Copy translation** copies formatted text and a Markdown or plain-text version. **Show original** switches to the source or, for an image, the transcribed text. **Retry** sends the same source again. Under the translation you can type a question about the text and press **Ask** or Enter, or press **Explain** for the meaning, idioms, abbreviations and terms. Each answer is in your native language and knows the earlier questions, so you can ask follow-ups. Drag the handle between the translation and the conversation to change their heights. Questions and answers are saved with the translation in History. Esc closes the window. Closing the window during a run cancels it. Links open only when you click them, and only `http`, `https`, and `mailto` links. A warning appears when links or email addresses in the translation differ from the original.
+
+Translate never writes into the source application. It runs separately from Fix actions: a translation can run while a Fix action runs or waits for its editor. One translation runs at a time; a new one replaces the running one. The stop shortcut and **Stop action** in the tray stop both. While a Fix action runs, the ring offers only the Translate actions, Settings, and History. While the reader or Settings is in front, it offers only **Region**, **Clipboard**, and the System actions.
+
+A translation can take up to three minutes; the result appears at once, not word by word. Text input is limited to 20,000 characters. Images are scaled to at most 2000 pixels on the long edge.
 
 ## Macros and application profiles
 
@@ -39,15 +57,15 @@ closed editor, or changed text stops insertion and keeps the result in History.
 
 Editors requiring a keyboard paste and formatted Gmail fields wait for you to return to the same
 unchanged field. **Result ready** identifies this state; **Cancel insertion** or the stop shortcut
-cancels the pending write while retaining the result. Only one action runs at a time, including this
-waiting period. The app never brings the target window to the foreground for automatic insertion.
+cancels the pending write while retaining the result. Only one Fix or macro action runs at a time,
+including this waiting period; a translation can run alongside it. The app never brings the target window to the foreground for automatic insertion.
 
 Direct UI Automation writes replace the field's plain text value. They can reset formatting and
 the editor's native Undo. Use these desktop actions on plain text; original text remains available
 through History. Text containing `<` waits for foreground insertion because some editors treat it
 as HTML. Native Windows Edit and the browser adapter use their own addressed replacement paths.
 
-History contains original text, results, status, and errors. Copying the original is available independently of restore.
+History contains original text, results, status, and errors. Copying the original is available independently of restore. Translations appear with the status translated, failed, or cancelled; for an image, History keeps the transcribed text, never the image.
 
 Select an applied result and choose **Restore**, focus the original editor, then press the ring shortcut. Restore requires a matching target and refuses when the document has changed. Browser navigation or a restarted app can invalidate the target.
 
@@ -67,7 +85,9 @@ reload the unpacked extension and refresh the page.
 
 The default data folder is `%LOCALAPPDATA%/DesktopAiAssistant`. Development and isolated tests can override it with `DESKTOP_AI_DATA`.
 
-History payloads and bridge credentials use DPAPI for the current Windows user. This does not encrypt every file in the folder. Settings and macro snippets are ordinary JSON. Provider jobs can contain submitted text. Protect this folder as personal data.
+History payloads and bridge credentials use DPAPI for the current Windows user. This does not encrypt every file in the folder. Settings and macro snippets are ordinary JSON. Provider jobs can contain submitted text; leftover job folders are removed at startup. Protect this folder as personal data.
+
+Text, clipboard content, and screen regions go to the selected AI provider only after you choose an action. The app takes no periodic screenshots. Region and clipboard images stay in memory and are never stored. Claude receives the image in its input stream; Codex receives a temporary image file in the job folder, deleted after the run.
 
 History retention is configurable. Settings import is a preview until Save and never runs imported actions. Review exports for private snippets or paths before sharing.
 
@@ -75,4 +95,4 @@ History retention is configurable. Settings import is a preview until Save and n
 
 Native Windows Edit controls have integration coverage for selected text, whole-field replacement, stale content, and input guards. Other desktop editors use UI Automation or a clipboard path and need app-specific verification.
 
-Gmail structure has DOM tests, but signed-in editing, autosave, and reopening a draft still need end-to-end acceptance. Test with a draft without recipients. Telegram Desktop is not claimed as verified. Password fields, elevated targets, general rich text outside Gmail, and non-Windows platforms are outside the supported scope.
+Gmail structure has DOM tests, but signed-in editing, autosave, and reopening a draft still need end-to-end acceptance. Test with a draft without recipients. Telegram Desktop is not claimed as verified. Image translation is verified with Claude only; Codex image input is not verified. Password fields, elevated targets, general rich text outside Gmail, and non-Windows platforms are outside the supported scope.
