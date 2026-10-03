@@ -99,8 +99,8 @@ def test_language_settings_pickers_and_history_follow_the_draft(tmp_path, monkey
         window.show()
         window.setProperty("page", 6)
         settle()
-        boxes = [named_item(window.contentItem(), "ruleBox_" + x).property("title") for x in ("english_formal", "english_social", "native", "translate")]
-        assert boxes == ["Fix EN · Formal", "Fix EN · Social", "Fix CZ", "Translate to CZ"]
+        boxes = [named_item(window.contentItem(), "ruleBox_" + x).property("title") for x in ("english_formal", "english_social", "native", "translate", "explain")]
+        assert boxes == ["Fix EN · Formal", "Fix EN · Social", "Fix CZ", "Translate to CZ", "Explain in CZ"]
         language = named_item(window.contentItem(), "nativeLanguage")
         assert language.property("currentText") == "Czech (CZ)"
         language.setProperty("currentIndex", [x["code"] for x in backend.languages].index("de"))
@@ -109,7 +109,8 @@ def test_language_settings_pickers_and_history_follow_the_draft(tmp_path, monkey
         assert window.property("draft").toVariant()["nativeLanguage"] == "de"
         assert named_item(window.contentItem(), "ruleBox_native").property("title") == "Fix DE"
         assert named_item(window.contentItem(), "ruleBox_translate").property("title") == "Translate to DE"
-        for key in ("native", "translate"):
+        assert named_item(window.contentItem(), "ruleBox_explain").property("title") == "Explain in DE"
+        for key in ("native", "translate", "explain"):
             area = named_item(window.contentItem(), "rules_" + key)
             assert QMetaObject.invokeMethod(area, "forceActiveFocus")
             settle()

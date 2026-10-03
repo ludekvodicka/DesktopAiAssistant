@@ -13,7 +13,7 @@ ApplicationWindow {
     Material.accent: "#72e1c2"
     color: Material.theme === Material.Dark ? "#101925" : "#eef3f8"
     property bool showOriginal: false
-    readonly property bool running: ['reading', 'translating'].includes(translator.state)
+    readonly property bool running: translator.running
     onClosing: close => { close.accepted = false; hide(); translator.closed() }
     Connections { target: translator; function onOpened() { reader.showOriginal = false } }
     Shortcut { sequence: "Esc"; onActivated: reader.close() }
@@ -80,7 +80,7 @@ ApplicationWindow {
         RowLayout {
             Layout.fillWidth: true
             Button { objectName: "readerStop"; text: "Stop"; visible: reader.running || translator.asking; onClicked: translator.stop() }
-            Button { objectName: "readerCopy"; text: "Copy translation"; highlighted: true; enabled: translator.state === 'done'; onClicked: translator.copy() }
+            Button { objectName: "readerCopy"; text: translator.copyText; highlighted: true; enabled: translator.state === 'done'; onClicked: translator.copy() }
             Button {
                 objectName: "readerOriginal"; text: "Show original"; checkable: true; checked: reader.showOriginal
                 enabled: translator.state === 'done'; onToggled: reader.showOriginal = checked

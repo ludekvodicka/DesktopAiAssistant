@@ -45,7 +45,10 @@ def effect(monitor, action, expected):
 
 
 def test_real_input_ignores_motion_and_own_keys_but_detects_user_actions():
-    window = win32gui.CreateWindowEx(0, "STATIC", "Owned input monitor test", win32con.WS_OVERLAPPEDWINDOW | win32con.WS_VISIBLE,
+    # Plain STATIC text is skipped by WindowFromPoint; SS_NOTIFY makes this an owned click target.
+    window = win32gui.CreateWindowEx(win32con.WS_EX_TOPMOST | win32con.WS_EX_NOACTIVATE,
+                                   "STATIC", "Owned input monitor test",
+                                   win32con.WS_POPUP | win32con.WS_VISIBLE | win32con.SS_NOTIFY,
                                    50, 50, 300, 180, 0, 0, 0, None)
     cursor = win32gui.GetCursorPos()
     monitor = None

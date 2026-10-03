@@ -12,10 +12,24 @@ class TextField:
     writes: list
     copies: list
 
+    clipboard: str
+    pastes: list
+
     def __init__(self):
         self.snapshot = {"kind": "windows", "target": {"process": "test.exe"}, "text": "helo", "full": "helo", "start": 0, "end": 4}
         self.writes = []
         self.copies = []
+        self.clipboard = "helo clip"
+        self.pastes = []
+
+    def read_clipboard(self):
+        return self.clipboard
+
+    def write_clipboard(self, text):
+        self.clipboard = text
+
+    def paste(self, target, text, tick):
+        self.pastes.append((target["process"], text, tick))
 
     def input_tick(self):
         return 123
@@ -23,8 +37,10 @@ class TextField:
     def capture(self, target):
         return copy.deepcopy(self.snapshot)
 
-    def copy_selection(self, target):
+    def copy_selection(self, target, plain=False):
         self.copies.append(target)
+        if plain:
+            return {"kind": "selection", "format": "plain", "text": "helo app", "image": None, "origin": target["process"]}
         return {"kind": "selection", "format": "markdown", "text": "# copied", "image": None, "origin": target["process"]}
 
     def apply(self, snapshot, text, tick=None, allow_background=False):
@@ -242,3 +258,54 @@ def test_read_selection_strips_gmail_markers(runner, monkeypatch):
     source = engine.read_selection({"process": "chrome.exe"})
     assert source == {"kind": "selection", "format": "plain", "text": "Fish & chips <3", "image": None, "origin": "chrome.exe"}
     assert engine.edit_target is None
+
+
+def test_edit_via_clipboard_writes_the_result_to_the_clipboard(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine_module.providers, "transform", lambda config, action, text, cancel: text.replace("helo", "hello"))
+    monkeypatch.setattr(engine, "apply", no_apply)
+    assert engine.edit_via("english_formal", {}, "clipboard")
+    assert field.clipboard == "hello clip" and field.pastes == [] and field.copies == []
+    entry = history.entries()[0]
+    assert (entry["status"], entry["via"], entry["source"], entry["original"], entry["result"]) == ("copied", "clipboard", "Clipboard", "helo clip", "hello clip")
+
+
+def test_edit_via_app_copies_and_pastes_with_the_input_tick(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine_module.providers, "transform", lambda config, action, text, cancel: text.replace("helo", "hello"))
+    assert engine.edit_via("native", {"process": "notepad++.exe"}, "app")
+    assert field.copies == [{"process": "notepad++.exe"}]
+    assert field.pastes == [("notepad++.exe", "hello app", 123)]
+    assert field.clipboard == "helo clip"
+    assert history.entries()[0]["status"] == "pasted"
+
+
+def test_edit_via_app_leaves_the_result_in_the_clipboard_when_paste_is_refused(runner, monkeypatch):
+    engine, field, history = runner
+    messages = []
+    engine.progress = messages.append
+    monkeypatch.setattr(engine_module.providers, "transform", lambda config, action, text, cancel: "hello app")
+    def refuse(target, text, tick):
+        raise RuntimeError("You used the keyboard or mouse in the meantime")
+    monkeypatch.setattr(field, "paste", refuse)
+    assert engine.edit_via("english_social", {"process": "chrome.exe"}, "app")
+    assert field.clipboard == "hello app"
+    entry = history.entries()[0]
+    assert entry["status"] == "copied" and "keyboard or mouse" in entry["error"]
+    assert messages[-1] == "You used the keyboard or mouse in the meantime, so the text was not pasted. The result is in the clipboard; paste it with Ctrl+V."
+
+
+def test_edit_via_unchanged_text_writes_nothing(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine_module.providers, "transform", lambda config, action, text, cancel: text)
+    assert engine.edit_via("english_formal", {"process": "notepad.exe"}, "app")
+    assert field.pastes == [] and field.clipboard == "helo clip"
+    assert history.entries()[0]["status"] == "unchanged"
+
+
+def test_edit_via_app_refuses_a_changed_window_before_copy(runner, monkeypatch):
+    engine, field, history = runner
+    monkeypatch.setattr(engine_module, "same_target", lambda target: False)
+    with pytest.raises(RuntimeError, match="no longer active"):
+        engine.edit_via("english_formal", {"process": "notepad.exe"}, "app")
+    assert field.copies == [] and history.entries() == []

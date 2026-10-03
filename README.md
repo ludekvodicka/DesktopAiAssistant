@@ -2,23 +2,23 @@
 
 **A Windows action ring for editing text, running macros, and keeping useful actions close to the cursor.**
 
-Select text in another app, open the ring, and choose an action. Correct English, switch between formal and casual writing, translate into English, or fix spelling in your native language. The result goes back to the original editor when the target is still safe to edit. Translate reads a selection, a screen region, or the clipboard and shows the translation in a reader window.
+Select text in another app, open the ring, and choose an action. Correct English, switch between formal and casual writing, translate into English, or fix spelling in your native language. The result goes back to the original editor when the target is still safe to edit. Explain reads a selection, a screen region, or the clipboard, then translates or explains it in a reader window.
 
-![Action ring with the English submenu attached to its outer edge](docs/images/action-ring.png)
+![Explain menu with translation, explanation and source submenus](docs/images/action-ring.png)
 
-**Windows preview, version 0.5.1.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
+**Windows preview, version 0.6.0.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
 
 ## What it does
 
-- **Text actions:** **Fix EN → Formal**, **Fix EN → Social**, and **Fix CZ** for your native language, through an installed Claude or Codex CLI. The native language is a setting; Czech is the default.
-- **Translate to your native language:** from a selection, a screen region, or the clipboard, shown in a reader window that keeps headings, lists, tables, and links.
+- **Text actions:** **Fix EN → Formal**, **Fix EN → Social**, and **Fix CZ** for your native language, through an installed Claude or Codex CLI. The native language is a setting; Czech is the default. The next ring after each action offers **Current app** (Ctrl+C and Ctrl+V) and **Clipboard** as sources.
+- **Translate or explain in your native language:** **Explain → Translate to CZ / Explain in CZ**, then a selection, screen region, or clipboard source. Results open in a reader with follow-up questions.
 - **A configurable ring:** eight fixed segments, custom labels and icons, and nested submenus. The open ring is controlled by the mouse only; keys keep going to the window underneath, and Esc closes the ring without being taken from that window. A click outside the ring closes it.
 - **Macros:** key combinations, text snippets, opening a file or URL, app activation, delays, and AI actions.
 - **Application profiles:** keep the main ring stable while changing contextual actions for the focused app.
 - **History and restore:** review saved results and restore original text when the target still matches.
 - **Chrome and Edge extension:** Gmail compose editing with formatting markers and plain text fields on individually enabled HTTPS sites.
 
-![Action ring editor with a demonstration Writing submenu](docs/images/ring-editor.png)
+![Action ring editor showing the Explain submenu and its two actions](docs/images/ring-editor.png)
 
 Screenshots use an isolated demo configuration, without personal editor contents, accounts, local paths, or conversation history.
 
@@ -69,7 +69,8 @@ With no selection, a text action uses the whole focused field. AI actions never 
 |---|---|
 | Polish a work message | Select the draft and choose **Fix EN → Formal**. |
 | Write a casual reply | Choose **Fix EN → Social**; lowercase output is configurable. |
-| Read a foreign web page | Select a part of the page and choose **Translate to CZ → Selection**. |
+| Read a foreign web page | Select a part of the page and choose **Explain → Translate to CZ → Selection**. |
+| Understand an unfamiliar term | Choose **Explain → Explain in CZ**, then the source. |
 | Insert a prepared sentence | Create a **text** macro with your own snippet. |
 | Group writing tools | Add a submenu in **Action ring**, then assign it to a segment. |
 
@@ -77,17 +78,21 @@ These are usage examples, not recorded AI outputs.
 
 ![Macro editor showing a harmless Quick reply snippet](docs/images/macros.png)
 
-## Translate
+## Translate and explain
 
-**Translate to CZ** is a ring group with three actions. Each one accepts its own shortcut under **App profiles → Direct action shortcuts**. The label follows the native language set under **Languages**.
+**Explain** contains **Translate to CZ** and **Explain in CZ**, each with three source actions in the next ring. Explanation directly describes meaning, terms and context, including text already in Czech or diagrams in an image. Each source action accepts its own shortcut under **App profiles → Direct action shortcuts**. The language follows the native language set under **Languages**.
 
 | Action | Source |
 |---|---|
 | **Selection** | The selected text in an editor, web page, or application. With no selection in an editor, the whole field. Content the editor adapters cannot read, such as a web page, is copied with Ctrl+C; the previous clipboard is restored when nothing else changed it. Terminals are refused. |
-| **Region** | Drag a rectangle on any screen. The image goes to the AI provider, which reads and translates the text. Esc or a right click cancels. |
+| **Region** | Drag a rectangle on one screen. Hold Ctrl to move it without resizing; release Ctrl to resize again. Releasing the mouse submits the image for translation or explanation. Esc or a right click cancels. |
 | **Clipboard** | Formatted text, plain text, or an image from the clipboard. |
 
 While a translation runs, the status popup shows its progress and **Stop translation**. The reader window then opens, sized to the text, and shows the translation with its structure, **Copy translation**, **Show original**, and **Retry**. Under the translation, **Ask** and **Explain** send questions about the text to the same provider; follow-up questions keep the earlier answers as context. A new translation replaces the content. Translate never writes into the source application. It runs separately from Fix actions, so both can run at the same time; the stop shortcut stops both.
+
+Explanations use the same reader, history and follow-up questions. **Copy explanation** copies the result; **Show original** switches to the captured source. The example below uses synthetic demo text, not a recorded AI response.
+
+![Reader with a Czech explanation of an English idiom, using synthetic demo text](docs/images/explanation.png)
 
 ## Browser integration
 

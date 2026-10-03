@@ -13,16 +13,17 @@ def data_dir():
 
 EDITS = tuple(RULES)
 TRANSLATIONS = ("translate_selection", "translate_region", "translate_clipboard")
-GROUPS = ("english", "translate", "macros", "application", "system")
-BUILT_IN = {"", "history", "settings", "restart", "jamat_new", "jamat_remarkable", *EDITS, *TRANSLATIONS, *GROUPS}
+EXPLANATIONS = ("explain_selection", "explain_region", "explain_clipboard")
+GROUPS = ("english", "reader", "translate", "explain", "macros", "application", "system")
+BUILT_IN = {"", "history", "settings", "restart", "jamat_new", "jamat_remarkable", *EDITS, *TRANSLATIONS, *EXPLANATIONS, *GROUPS}
 
 DEFAULT = {
-    "version": 5, "hotkey": "Ctrl+Alt+Space", "stopHotkey": "Ctrl+Alt+Escape",
+    "version": 6, "hotkey": "Ctrl+Alt+Space", "stopHotkey": "Ctrl+Alt+Escape",
     "provider": "claude", "models": {"claude": "", "codex": ""},
     "theme": "dark", "size": 1.0, "reducedMotion": False, "historyDays": 30,
     "socialLowercase": True, "autostart": False, "nativeLanguage": "cs",
-    "rules": {"english_formal": "", "english_social": "", "native": "", "translate": ""},
-    "slots": ["macros", "english", "translate", "native", "system", "", "application", ""],
+    "rules": {"english_formal": "", "english_social": "", "native": "", "translate": "", "explain": ""},
+    "slots": ["macros", "english", "reader", "native", "system", "", "application", ""],
     "bindings": [],
     "appearance": {},
     "slotAppearance": [{} for _ in range(8)],
@@ -39,7 +40,7 @@ def native_id(action):
 
 
 def validate(value):
-    if not isinstance(value, dict) or value.get("version") not in (1, 2, 3, 4, 5):
+    if not isinstance(value, dict) or value.get("version") not in (1, 2, 3, 4, 5, 6):
         raise ValueError("Unsupported settings version")
     if set(value) - set(DEFAULT):
         raise ValueError("Unknown settings fields")
@@ -68,9 +69,16 @@ def validate(value):
         # Schema 4 tolerated extra rule keys; schema 5 rejects them, which would stop the app at start.
         if isinstance(result["rules"], dict):
             result["rules"] = {k: v for k, v in result["rules"].items() if k in DEFAULT["rules"]}
-        if "translate" not in result["slots"] and "" in result["slots"]:
+        if not any(action in result["slots"] for action in ("translate", "reader")) and "" in result["slots"]:
             result["slots"][result["slots"].index("")] = "translate"
-    result["version"] = 5
+    if result["version"] < 6:
+        result["slots"] = ["reader" if x == "translate" else x for x in result["slots"]]
+        for owner in result["folders"] + result["profiles"]:
+            if isinstance(owner.get("actions"), list):
+                owner["actions"] = ["reader" if x == "translate" else x for x in owner["actions"]]
+        if isinstance(result["appearance"], dict) and "translate" in result["appearance"]:
+            result["appearance"]["reader"] = result["appearance"].pop("translate")
+    result["version"] = 6
     if result["provider"] not in ("codex", "claude") or result["theme"] not in ("dark", "light", "contrast"):
         raise ValueError("Invalid provider or theme")
     if result["size"] not in (0.85, 1.0, 1.2) or not isinstance(result["historyDays"], int) or not 1 <= result["historyDays"] <= 365:

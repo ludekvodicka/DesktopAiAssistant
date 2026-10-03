@@ -132,6 +132,58 @@ class Engine:
             self.waiting_for_editor = False
             self.edit_target = None
 
+    def edit_via(self, action, target, via):
+        if via == "clipboard":
+            self.progress("Reading the clipboard…")
+            text, source, tick = self.windows.read_clipboard(), "Clipboard", None
+        elif via == "app":
+            if not same_target(target):
+                raise RuntimeError("The original window is no longer active")
+            self.progress("Copying the selection…")
+            text, source = self.windows.copy_selection(target, plain=True)["text"], target["process"]
+            # The monitor can still be counting the copy shortcut.
+            tick = self.windows.input_tick()
+            for _ in range(6):
+                if self.cancel.wait(0.15) or self.windows.input_tick() == tick:
+                    break
+                tick = self.windows.input_tick()
+        else:
+            raise ValueError("Unknown text source")
+        job = self.history.create({"action": action, "via": via, "source": source, "original": text,
+                                   "provider": self.config.value["provider"], "rulesVersion": 1, "language": self.config.value["nativeLanguage"],
+                                   "rules": self.config.value["rules"].get(action, ""), "model": self.config.value["models"][self.config.value["provider"]]})
+        try:
+            self.progress("Editing with " + self.config.value["provider"] + "…")
+            result = providers.transform(self.config.value, action, text, self.cancel)
+            self.history.update(job, "ready", result=result)
+            if self.cancel.is_set():
+                raise providers.Cancelled("Cancelled")
+            if result == text:
+                self.history.update(job, "unchanged")
+                self.progress("No changes needed. The text is already correct.")
+            elif via == "clipboard":
+                self.windows.write_clipboard(result)
+                self.history.update(job, "copied")
+                self.progress("Result copied to the clipboard. Original saved in History.")
+            else:
+                try:
+                    self.windows.paste(target, result, tick)
+                except RuntimeError as error:
+                    # The selection cannot be verified without an adapter, so the user pastes it.
+                    self.windows.write_clipboard(result)
+                    self.history.update(job, "copied", error=str(error))
+                    self.progress(f"{str(error).rstrip('.')}, so the text was not pasted. The result is in the clipboard; paste it with Ctrl+V.")
+                    return True
+                self.history.update(job, "pasted")
+                self.progress("Text pasted. Original saved in History.")
+            return True
+        except providers.Cancelled:
+            self.history.update(job, "cancelled")
+            raise
+        except Exception as error:
+            self.history.update(job, "failed", error=str(error) or type(error).__name__)
+            raise
+
     def app_command(self, action):
         if action == "jamat_remarkable":
             raise RuntimeError("Jamat does not expose a verified reMarkable import command yet.")

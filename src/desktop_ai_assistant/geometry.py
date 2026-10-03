@@ -1,5 +1,7 @@
 import math
 
+RING_RADII = (68, 158, 230, 298)
+
 
 def point(cx, cy, r, angle):
     a = math.radians(angle)
@@ -12,5 +14,7 @@ def sector(cx, cy, inner, outer, start, end):
 
 
 def ring_geometry():
-    return [{"path": sector(300, 300, 68, 158, -112.5 + i * 45, -67.5 + i * 45),
+    inner, outer = RING_RADII[:2]
+    return [{"path": sector(300, 300, inner, outer, -112.5 + i * 45, -67.5 + i * 45),
+             "inner": inner, "outer": outer,
              "x": point(300, 300, 113, -90 + i * 45)[0], "y": point(300, 300, 113, -90 + i * 45)[1]} for i in range(8)]

@@ -137,6 +137,7 @@ def _legacy_hooks():
 
 def _probe(connection):
     lags, hooks = {}, None
+    complete = threading.Event()
 
     @HOOK_CALLBACK
     def mouse(code, message, data):
@@ -145,6 +146,8 @@ def _probe(connection):
             index = event.dwExtraInfo - MOVE_MARKER
             if 0 <= index < MOVES:
                 lags[index] = (kernel32.GetTickCount() - event.time) & 0xFFFFFFFF
+                if len(lags) == MOVES:
+                    complete.set()
         return hook_user32.CallNextHookEx(None, code, message, data)
 
     try:
@@ -152,6 +155,8 @@ def _probe(connection):
         hooks = _start_hooks(((14, mouse),))
         connection.send(("ready", None))
         _receive(connection, "stop", 60)
+        # SendInput can return before a delayed hook chain delivers the final move.
+        complete.wait(2)
         _stop_hooks(hooks)
         hooks = None
         connection.send(("lags", sorted(lags.items())))

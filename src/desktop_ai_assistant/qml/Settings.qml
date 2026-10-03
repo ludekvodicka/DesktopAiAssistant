@@ -135,7 +135,7 @@ ApplicationWindow {
                         ColumnLayout {
                             width: macroScroll.availableWidth; spacing: 12; visible: window.macroIndex >= 0 && window.macroIndex < window.draft.macros.length
                             property var macro: visible ? window.draft.macros[window.macroIndex] : ({name: '', steps: []})
-                            TextField { Layout.fillWidth: true; text: parent.macro.name; placeholderText: "Macro name"; onEditingFinished: { window.draft.macros[window.macroIndex].name = text; window.updateDraft() } }
+                            TextField { Layout.fillWidth: true; Layout.topMargin: 10; text: parent.macro.name; placeholderText: "Macro name"; onEditingFinished: { window.draft.macros[window.macroIndex].name = text; window.updateDraft() } }
                             Repeater {
                                 model: parent.macro.steps
                                 delegate: Frame {

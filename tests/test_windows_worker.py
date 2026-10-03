@@ -67,7 +67,63 @@ def test_copy_selection_waits_for_modifiers_outside_the_worker(adapter, monkeypa
     released = time.monotonic() + 0.2
     monkeypatch.setattr(winapi.user32, "GetAsyncKeyState", lambda vk: -32768 if time.monotonic() < released else 0)
     assert adapter.copy_selection({"process": "notepad.exe"}) == {"text": "copied"}
-    assert calls == [{"op": "copy", "target": {"process": "notepad.exe"}}]
+    assert calls == [{"op": "copy", "target": {"process": "notepad.exe"}, "plain": False}]
+
+
+def test_paste_refuses_a_terminal_without_starting_the_worker(adapter):
+    adapter, calls = adapter
+    with pytest.raises(RuntimeError, match="Terminal input"):
+        adapter.paste({"process": "pwsh.exe"}, "text", 1)
+    assert calls == [] and adapter.process is None
+
+
+@pytest.mark.skipif(os.environ.get("DESKTOP_AI_LIVE_TESTS") != "1" or not os.path.exists(r"C:\Program Files\Notepad++\notepad++.exe"),
+                    reason="needs DESKTOP_AI_LIVE_TESTS=1 and Notepad++")
+def test_scintilla_reads_and_replaces_the_selection_in_notepad_plus_plus(tmp_path):
+    import ctypes as C
+    import subprocess
+    import win32gui
+    import win32process
+    from desktop_ai_assistant.scintilla import Scintilla
+    sample = tmp_path / "sample.txt"
+    sample.write_bytes("Příliš žluťoučký kůň\r\nhelo world\r\n".encode("utf-8"))
+    process = subprocess.Popen([r"C:\Program Files\Notepad++\notepad++.exe", "-multiInst", "-nosession", "-notabbar", str(sample)])
+
+    def message(hwnd, code, wparam=0, lparam=0):
+        result = C.c_size_t()
+        if not C.windll.user32.SendMessageTimeoutW(hwnd, code, C.c_size_t(wparam), C.c_ssize_t(lparam), 2, 1000, C.byref(result)):
+            raise RuntimeError("no response")
+        return result.value
+
+    def editors():
+        found = []
+        def each(hwnd, _):
+            if win32process.GetWindowThreadProcessId(hwnd)[1] == process.pid and win32gui.GetClassName(hwnd) == "Notepad++":
+                win32gui.EnumChildWindows(hwnd, lambda h, _: found.append(h) if win32gui.GetClassName(h) == "Scintilla" and win32gui.IsWindowVisible(h) else None, None)
+            return True
+        win32gui.EnumWindows(each, None)
+        return found
+
+    try:
+        deadline = time.monotonic() + 10
+        while not editors() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        time.sleep(0.5)
+        editor = Scintilla(editors()[0], message)
+        try:
+            full, start, end = editor.read()
+            assert full == "Příliš žluťoučký kůň\r\nhelo world\r\n" and start == end
+            first = len(full[:22].encode("utf-8"))
+            message(editor.hwnd, 2160, first, first + 4)
+            full, start, end = editor.read()
+            assert (start, end) == (22, 26)
+            editor.replace(full, start, end, "hello ✓")
+            assert editor.read()[0] == "Příliš žluťoučký kůň\r\nhello ✓ world\r\n"
+        finally:
+            editor.close()
+    finally:
+        process.kill()
+        process.wait()
 
 
 def test_copy_selection_refuses_a_terminal_by_window_class(adapter, monkeypatch):

@@ -61,7 +61,7 @@ def main():
     settings_engine.rootContext().setContextProperty("backend", backend)
     translator = backend.translator
     settings_engine.rootContext().setContextProperty("translator", translator)
-    updates = Updates.create(app, busy=lambda: backend.busy)
+    updates = Updates.create(app, busy=lambda: backend.busy or translator.active)
     settings_engine.rootContext().setContextProperty("updates", updates)
     settings_engine.load(QUrl.fromLocalFile(str(qml / "Settings.qml")))
     settings_engine.load(QUrl.fromLocalFile(str(qml / "Reader.qml")))
@@ -121,7 +121,7 @@ def main():
         toast.rootObject().setProperty("failed", bool(error))
         position_status()
         toast.show()
-        if backend.busy or translator.state in ("reading", "translating"):
+        if backend.busy or translator.running:
             toast_timer.stop()
         else:
             toast_timer.start(12000 if error else 7000)
@@ -149,7 +149,7 @@ def main():
 
     def translation_status():
         nonlocal translation_toast
-        if translator.state in ("reading", "translating"):
+        if translator.running:
             if not backend.busy:
                 translation_toast = True
                 show_status()

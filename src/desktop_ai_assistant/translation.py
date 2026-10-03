@@ -4,7 +4,7 @@ from PySide6.QtCore import QMimeData, QObject, Qt, QUrl, Signal, Slot, Property
 from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication, QTextDocument
 from . import providers
 from .clipboard import source_from_mime
-from .text import EXPLAIN, LANGUAGES, SOURCES, clean_markdown
+from .text import EXPLAIN, LANGUAGES, READER_ACTIONS, SOURCES, clean_markdown
 
 FORMS = {"plain": "plain", "markdown": "markdown", "image": "markdown"}
 IMAGES = {"selection": "Image from the selection", "region": "Image from the screen region", "clipboard": "Image from the clipboard"}
@@ -56,6 +56,8 @@ class Translator(QObject):
     _generation: int
     _settings: dict | None
     _region_settings: dict | None
+    _operation: str
+    _region_operation: str
     _kind: str
     _source: dict | None
     _state: str
@@ -77,6 +79,7 @@ class Translator(QObject):
         self.config, self.history, self.read_selection = config, history, read_selection
         self._thread, self._cancel, self._generation = None, threading.Event(), 0
         self._settings, self._region_settings, self._kind, self._source = None, None, "", None
+        self._operation, self._region_operation = "translate", "translate"
         self._state, self._error, self._note = "idle", "", ""
         self._result_text, self._result_html, self._source_html = "", "", ""
         self._job, self._original, self._conversation, self._pending, self._ask_error = "", "", [], "", ""
@@ -93,11 +96,27 @@ class Translator(QObject):
     def state(self):
         return self._state
 
+    @Property(bool, notify=changed)
+    def running(self):
+        return self._state in ("reading", "translating", "explaining")
+
+    @Property(str, notify=changed)
+    def progressText(self):
+        return READER_ACTIONS[self._operation]["progress"]
+
+    @Property(str, notify=changed)
+    def copyText(self):
+        return READER_ACTIONS[self._operation]["copy"]
+
+    @Property(str, notify=changed)
+    def stopText(self):
+        return READER_ACTIONS[self._operation]["stop"]
+
     @Property(str, notify=changed)
     def title(self):
         if self._settings is None:
             return ""
-        title = f"Translate to {LANGUAGES[self._settings['nativeLanguage']][0]} · {SOURCES[self._kind]}"
+        title = f"{READER_ACTIONS[self._operation]['title']} {LANGUAGES[self._settings['nativeLanguage']][0]} · {SOURCES[self._kind]}"
         return title + " · " + self._source["origin"] if self._kind == "selection" and self._source else title
 
     @Property(str, notify=changed)
@@ -146,40 +165,44 @@ class Translator(QObject):
             entries.append(f"**Q:** {label.get(self._pending, self._pending)}\n\n_…_")
         return render_html("\n\n---\n\n".join(entries), "markdown") if entries else ""
 
-    def start(self, kind, target):
+    def start(self, kind, target, operation="translate"):
+        if operation not in READER_ACTIONS:
+            raise ValueError("Unknown reader action")
         settings = copy.deepcopy(self.config.value)
         if kind == "selection":
-            self._begin(settings, kind, target, None)
+            self._begin(settings, kind, target, None, operation)
         elif kind == "clipboard":
             try:
                 source = source_from_mime(QGuiApplication.clipboard().mimeData(), kind, "Clipboard", "The clipboard has no text")
             except RuntimeError as error:
                 self.notice.emit(str(error))
                 return
-            self._begin(settings, kind, target, source)
+            self._begin(settings, kind, target, source, operation)
         elif kind == "region":
             self._region_settings = settings
+            self._region_operation = operation
             self.regionRequested.emit()
         else:
             raise ValueError("Unknown translation source")
 
     def region_picked(self, png):
         self._begin(self._region_settings, "region", None,
-                    {"kind": "region", "format": "image", "text": "", "image": png, "origin": "Screen region"})
+                    {"kind": "region", "format": "image", "text": "", "image": png, "origin": "Screen region"}, self._region_operation)
 
-    def _begin(self, settings, kind, target, source):
+    def _begin(self, settings, kind, target, source, operation):
         self._cancel.set()
         previous, self._cancel = self._thread, threading.Event()
         self._generation += 1
         self._settings, self._kind, self._source, self._note = settings, kind, source, ""
+        self._operation = operation
         self._ask_cancel.set()
         self._job, self._original, self._conversation, self._pending, self._ask_error = "", "", [], "", ""
-        self._set("reading" if source is None else "translating")
+        self._set("reading" if source is None else READER_ACTIONS[operation]["state"])
         self._thread = threading.Thread(target=self._run, daemon=True,
-                                        args=(self._generation, settings, target, source, self._cancel, previous))
+                                        args=(self._generation, settings, target, source, self._cancel, previous, operation))
         self._thread.start()
 
-    def _run(self, generation, settings, target, source, cancel, previous):
+    def _run(self, generation, settings, target, source, cancel, previous, operation):
         job = None
         try:
             if source is None:
@@ -192,11 +215,16 @@ class Translator(QObject):
                 previous.join()
             if cancel.is_set():
                 raise providers.Cancelled("Cancelled")
-            job = self.history.create({"action": "translate_" + source["kind"], "source": source["origin"], "original": source["text"],
+            job = self.history.create({"action": operation + "_" + source["kind"], "source": source["origin"], "original": source["text"],
                                        "format": source["format"], "language": settings["nativeLanguage"], "provider": settings["provider"],
-                                       "model": settings["models"][settings["provider"]], "rules": settings["rules"]["translate"]})
-            result = providers.translate(settings, source, cancel)
-            self.history.update(job, "translated", original=result["source"], result=result["text"])
+                                       "model": settings["models"][settings["provider"]], "rules": settings["rules"][operation]})
+            if operation == "translate":
+                result = providers.translate(settings, source, cancel)
+            elif operation == "explain":
+                result = providers.explain(settings, source, cancel)
+            else:
+                raise ValueError("Unknown reader action")
+            self.history.update(job, READER_ACTIONS[operation]["status"], original=result["source"], result=result["text"])
             self._done.emit(generation, "done", {**result, "job": job})
         except providers.Cancelled:
             if job:
@@ -212,17 +240,18 @@ class Translator(QObject):
     def _on_read(self, generation, source):
         if generation == self._generation:
             self._source = source
-            self._set("translating")
+            self._set(READER_ACTIONS[self._operation]["state"])
 
     @Slot(int, str, object)
     def _on_done(self, generation, outcome, payload):
         if generation != self._generation:
             return
         if outcome == "done":
-            form = FORMS[self._source["format"]]
+            source_form = FORMS[self._source["format"]]
+            form = "markdown" if self._operation == "explain" else source_form
             self._result_text, self._job, self._original = payload["text"], payload["job"], payload["source"]
-            self._result_html, self._source_html = render_html(payload["text"], form), render_html(payload["source"], form)
-            same = payload["text"].strip() == payload["source"].strip()
+            self._result_html, self._source_html = render_html(payload["text"], form), render_html(payload["source"], source_form)
+            same = self._operation == "translate" and payload["text"].strip() == payload["source"].strip()
             self._note = payload["warning"] or (f"The text is already in {LANGUAGES[self._settings['nativeLanguage']][1]}" if same else "")
             self._set("done")
             self.opened.emit()
@@ -277,7 +306,7 @@ class Translator(QObject):
         if ok:
             self._conversation.append({"question": question, "answer": text})
             try:
-                self.history.update(self._job, "translated", conversation=self._conversation)
+                self.history.update(self._job, READER_ACTIONS[self._operation]["status"], conversation=self._conversation)
             except ValueError:
                 pass  # The entry expired or History was cleared; the answer still shows.
         else:
@@ -288,11 +317,11 @@ class Translator(QObject):
     @Slot()
     def retry(self):
         if self.canRetry:
-            self._begin(copy.deepcopy(self.config.value), self._kind, None, self._source)
+            self._begin(copy.deepcopy(self.config.value), self._kind, None, self._source, self._operation)
 
     @Slot()
     def closed(self):
-        if self._state in ("reading", "translating") or self._pending:
+        if self.running or self._pending:
             self.stop()
 
     @Slot()

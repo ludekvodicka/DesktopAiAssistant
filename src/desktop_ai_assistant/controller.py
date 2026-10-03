@@ -12,35 +12,45 @@ import winreg
 from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication, QDesktopServices
 from PySide6.QtWidgets import QFileDialog
-from .config import Config, DEFAULT, EDITS, GROUPS, TRANSLATIONS, validate, data_dir
+from .config import Config, DEFAULT, EDITS, EXPLANATIONS, GROUPS, TRANSLATIONS, validate, data_dir
 from .history import History
 from .windows_text import WindowsText
 from .bridge import BrowserBridge
 from .engine import Engine
-from .geometry import ring_geometry, sector, point
+from .geometry import RING_RADII, ring_geometry, sector, point
 from .winapi import Hotkeys, foreground, same_target, parse_key, user32, window_at_cursor
 from .providers import clean_jobs, command, provider_env, run_process
 from .translation import Translator
 from .text import LANGUAGES, SOURCES
 
-LABELS = {"english": "Fix EN", "english_formal": "Formal", "english_social": "Social",
+LABELS = {"english": "Fix EN", "english_formal": "Formal", "english_social": "Social", "reader": "Explain",
           "translate_selection": "Selection", "translate_region": "Region", "translate_clipboard": "Clipboard",
+          "explain_selection": "Selection", "explain_region": "Region", "explain_clipboard": "Clipboard",
           "macros": "Macros", "application": "Application", "system": "System", "history": "History", "settings": "Open config", "restart": "Restart app", "jamat_new": "New session", "jamat_remarkable": "Read reMarkable"}
 TITLES = {"english_formal": "Fix EN · Formal", "english_social": "Fix EN · Social"}
 ICONS = {"english": "Aa", "english_formal": "Aa", "english_social": "hi", "translate": "⇄", "translate_selection": "¶", "translate_region": "⬚", "translate_clipboard": "⎘",
+         "reader": "?", "explain": "?", "explain_selection": "¶", "explain_region": "⬚", "explain_clipboard": "⎘",
          "macros": "⌘", "application": "▦", "system": "⚙", "history": "↶", "settings": "⚙", "restart": "↻", "jamat_new": "+", "jamat_remarkable": "▤"}
-CATALOG = ["english", "english_formal", "english_social", "native", "translate", *TRANSLATIONS, "macros",
+# Where a language edit reads and writes its text instead of the editor adapter.
+VIA = {"app": ("Current app", "✎"), "clipboard": ("Clipboard", "⎘")}
+CATALOG = ["english", "english_formal", "english_social", "native", "reader", "translate", "explain", *TRANSLATIONS, *EXPLANATIONS, "macros",
            "application", "system", "history", "settings", "restart", "jamat_new", "jamat_remarkable"]
 
 
 def names(action, value):
     short, _, icon = LANGUAGES[value["nativeLanguage"]]
+    if "@" in action:
+        base, via = action.split("@", 1)
+        return VIA[via][0], names(base, value)[1] + " · " + VIA[via][0], VIA[via][1]
     if action == "native":
         return "Fix " + short, "Fix " + short, icon
     if action == "translate":
         return "Translate to " + short, "Translate to " + short, ICONS[action]
-    if action in TRANSLATIONS:
-        return LABELS[action], f"Translate to {short} · {SOURCES[action.removeprefix('translate_')]}", ICONS[action]
+    if action == "explain":
+        return "Explain in " + short, "Explain in " + short, ICONS[action]
+    if action in TRANSLATIONS + EXPLANATIONS:
+        operation, kind = action.split("_", 1)
+        return LABELS[action], f"{names(operation, value)[1]} · {SOURCES[kind]}", ICONS[action]
     return LABELS.get(action, action), TITLES.get(action, LABELS.get(action, action)), ICONS.get(action, "›")
 
 
@@ -67,6 +77,8 @@ class Controller(QObject):
     _profile: dict | None
     _menu: list
     _children: list
+    _variants: list
+    _child: int
     _folder_path: list
     _history: list
     _parent: int
@@ -93,7 +105,8 @@ class Controller(QObject):
         self.hotkeys = Hotkeys(self.hotkey)
         app.installNativeEventFilter(self.hotkeys)
         self._status, self._busy, self._target, self._limit, self._profile = "Ready", False, {}, "", None
-        self._menu, self._children, self._history = [], [], []
+        self._menu, self._children, self._variants, self._history = [], [], [], []
+        self._child = -1
         self._folder_path = []
         self._parent, self._armed, self._pending_restore, self._paused = -1, "", "", False
         self._ring_visible, self._ring_clicks, self.ring_window = False, 0, 0
@@ -132,6 +145,10 @@ class Controller(QObject):
     def children(self):
         return self._children
 
+    @Property('QVariantList', notify=changed)
+    def variants(self):
+        return self._variants
+
     @Property(bool, notify=changed)
     def canGoBack(self):
         return bool(self._folder_path)
@@ -164,7 +181,8 @@ class Controller(QObject):
             entry["displayOriginal"] = html.unescape(re.sub(r"</?t\d+>|<o\d+/>", "", entry.get("original", "")))
             entry["displayResult"] = html.unescape(re.sub(r"</?t\d+>|<o\d+/>", "", entry.get("result", ""))) + "".join(
                 f"\n\nQ: {x['question']}\nA: {x['answer']}" for x in entry.get("conversation", []))
-            entry["displayAction"] = names(entry["action"], self.config.value)[1] if entry["action"] in CATALOG else entry["action"]
+            entry["displayAction"] = names(entry["action"] + ("@" + entry["via"] if entry.get("via") in VIA else ""), self.config.value)[1] \
+                if entry["action"] in CATALOG else entry["action"]
         self._menu = []
         for index, action in enumerate(self.config.value["slots"]):
             item = self.action_item(action)
@@ -198,9 +216,9 @@ class Controller(QObject):
         if self._limit == "":
             return True
         elif self._limit == "own":
-            return action in ("translate_region", "translate_clipboard", "settings", "history", "restart")
+            return action in ("translate_region", "translate_clipboard", "explain_region", "explain_clipboard", "settings", "history", "restart") or action.endswith("@clipboard")
         elif self._limit == "busy":
-            return action in TRANSLATIONS + ("settings", "history")
+            return action in TRANSLATIONS + EXPLANATIONS + ("settings", "history")
         else:
             raise ValueError("Unknown ring limit")
 
@@ -208,8 +226,12 @@ class Controller(QObject):
         value = self.config.value if value is None else value
         if action == "english":
             return ["english_formal", "english_social"]
+        elif action == "reader":
+            return ["translate", "explain"]
         elif action == "translate":
             return list(TRANSLATIONS)
+        elif action == "explain":
+            return list(EXPLANATIONS)
         elif action == "macros":
             return ["macro:" + x["id"] for x in value["macros"]][:6]
         elif action == "application":
@@ -220,6 +242,14 @@ class Controller(QObject):
             return next((x["actions"] for x in value["folders"] if "folder:" + x["id"] == action), [])
         else:
             return []
+
+    @staticmethod
+    def variant_actions(action):
+        if action == "translate":
+            return list(TRANSLATIONS)
+        if action == "explain":
+            return list(EXPLANATIONS)
+        return [f"{action}@{via}" for via in VIA] if action in EDITS else []
 
     def configure_hotkeys(self, value):
         keys = [value["hotkey"], value["stopHotkey"]] + [x["key"] for x in value["bindings"]]
@@ -298,7 +328,7 @@ class Controller(QObject):
                 self._armed = ""
                 QTimer.singleShot(180, lambda: self.execute(action))
                 return
-            self._children, self._parent, self._folder_path = [], -1, []
+            self._children, self._variants, self._child, self._parent, self._folder_path = [], [], -1, -1, []
             self.refresh()
             if parse_key(key) == parse_key(self.config.value["hotkey"]):
                 self.requestMenu.emit()
@@ -322,19 +352,40 @@ class Controller(QObject):
         self.render_children(self._menu[index]["id"] if index >= 0 else "")
 
     def render_children(self, action):
-        self._children = []
-        actions = self.group_actions(action)
+        self._children, self._variants, self._child = [], [], -1
+        actions = self.group_actions(action) or self.variant_actions(action)
         if actions and self._parent >= 0:
             angle = -90 + self._parent * 45
             cx, cy = 300, 300
             width = min(108, max(64, len(actions) * 28))
-            inner, outer, label_radius = 158, 230, 194
+            inner, outer = RING_RADII[1:3]
+            label_radius = (inner + outer) / 2
             label_width = min(52, 2 * label_radius * math.sin(math.radians(width / len(actions) / 2)) - 16)
             for i, child in enumerate(actions):
                 start, end = angle - width / 2 + width * i / len(actions), angle - width / 2 + width * (i + 1) / len(actions)
                 x, y = point(cx, cy, label_radius, (start + end) / 2)
                 self._children.append({**self.action_item(child), "path": sector(cx, cy, inner, outer, start, end), "x": x, "y": y,
                                        "cx": cx, "cy": cy, "start": start, "end": end, "inner": inner, "outer": outer, "labelWidth": label_width})
+        self.changed.emit()
+
+    @Slot(int)
+    def hoverChild(self, index):
+        if index == self._child or not 0 <= index < len(self._children):
+            return
+        self._child = index
+        child = self._children[index]
+        actions = self.variant_actions(child["id"])
+        self._variants = []
+        if actions:
+            middle, width = (child["start"] + child["end"]) / 2, max(child["end"] - child["start"], 56)
+            inner, outer = RING_RADII[2:4]
+            label_radius = (inner + outer) / 2
+            label_width = min(60, 2 * label_radius * math.sin(math.radians(width / len(actions) / 2)) - 14)
+            for i, variant in enumerate(actions):
+                start, end = middle - width / 2 + width * i / len(actions), middle - width / 2 + width * (i + 1) / len(actions)
+                x, y = point(300, 300, label_radius, (start + end) / 2)
+                self._variants.append({**self.action_item(variant), "path": sector(300, 300, inner, outer, start, end), "x": x, "y": y,
+                                       "cx": 300, "cy": 300, "start": start, "end": end, "inner": inner, "outer": outer, "labelWidth": label_width})
         self.changed.emit()
 
     @Slot(int)
@@ -364,8 +415,12 @@ class Controller(QObject):
             self.restartApp()
         elif action in EDITS:
             self.work(lambda: self.engine.edit(action, self._target))
-        elif action in TRANSLATIONS:
-            self.translator.start(action.removeprefix("translate_"), self._target)
+        elif action.partition("@")[0] in EDITS and action.partition("@")[2] in VIA:
+            base, _, via = action.partition("@")
+            self.work(lambda: self.engine.edit_via(base, self._target, via))
+        elif action in TRANSLATIONS + EXPLANATIONS:
+            operation, kind = action.split("_", 1)
+            self.translator.start(kind, self._target, operation)
         elif action.startswith("macro:"):
             self.work(lambda: self.engine.macro(action[6:], self._target))
         elif action in ("jamat_new", "jamat_remarkable"):

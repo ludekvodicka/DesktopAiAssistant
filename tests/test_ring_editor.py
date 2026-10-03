@@ -21,7 +21,7 @@ def test_folders_validate_references_cycles_and_migrate_old_appearance():
     value.pop("folders")
     value.pop("slotAppearance")
     migrated = validate(value)
-    assert migrated["version"] == 5
+    assert migrated["version"] == 6
     assert migrated["appearance"] == value["appearance"]
     assert migrated["slots"] == value["slots"]
     migrated["folders"] = [{"id": "one", "name": "One", "actions": ["folder:two"]}, {"id": "two", "name": "Two", "actions": ["native"]}]
@@ -46,20 +46,22 @@ def test_labels_follow_native_language_without_restart(tmp_path, monkeypatch):
     backend.monitor.stop()
     monkeypatch.setattr(backend, "set_autostart", lambda enabled: None)
     try:
-        assert [x["name"] for x in backend.menu[1:4]] == ["Fix EN", "Translate to CZ", "Fix CZ"]
+        assert [x["name"] for x in backend.menu[1:4]] == ["Fix EN", "Explain", "Fix CZ"]
         assert backend.menu[2]["group"] and not backend.menu[3]["group"]
         backend.hover(1)
         assert [(x["name"], x["title"]) for x in backend.children] == [("Formal", "Fix EN · Formal"), ("Social", "Fix EN · Social")]
         backend.hover(2)
+        assert [x["name"] for x in backend.children] == ["Translate to CZ", "Explain in CZ"]
+        backend.enterChild(0)
         assert [x["name"] for x in backend.children] == ["Selection", "Region", "Clipboard"]
         assert backend.children[0]["title"] == "Translate to CZ · from selection"
         draft = copy.deepcopy(backend.config.value)
         draft["nativeLanguage"] = "de"
-        assert [x["name"] for x in backend.previewMenu(json.dumps(draft))[1:4]] == ["Fix EN", "Translate to DE", "Fix DE"]
+        assert [x["name"] for x in backend.previewMenu(json.dumps(draft))[1:4]] == ["Fix EN", "Explain", "Fix DE"]
         assert backend.menu[3]["name"] == "Fix CZ"
         draft["nativeLanguage"] = "sk"
         assert backend.saveSettings(json.dumps(draft))
-        assert [x["name"] for x in backend.menu[2:4]] == ["Translate to SK", "Fix SK"]
+        assert [x["name"] for x in backend.menu[2:4]] == ["Explain", "Fix SK"]
         draft["appearance"] = {"native": {"name": "Opravit"}}
         assert backend.previewMenu(json.dumps(draft))[3]["name"] == "Opravit"
         assert backend.saveSettings(json.dumps(draft))
@@ -81,17 +83,20 @@ def test_ring_limits_while_own_window_is_in_front_or_an_action_runs(tmp_path, mo
     front = {"hwnd": 1, "pid": os.getpid(), "started": 0, "process": "python.exe", "title": ""}
     monkeypatch.setattr(controller_module, "foreground", lambda: dict(front))
     started, menus = [], []
-    monkeypatch.setattr(backend.translator, "start", lambda kind, target: started.append((kind, target["process"])))
+    monkeypatch.setattr(backend.translator, "start", lambda kind, target, operation: started.append((kind, target["process"])))
     backend.requestMenu.connect(lambda: menus.append(True))
 
     def enabled(slot):
         backend.hover(slot)
+        if slot == 2:
+            backend.hoverChild(0)
+            return [x["enabled"] for x in backend.variants]
         return [x["enabled"] for x in backend.children]
 
     try:
         backend.hotkey("Ctrl+Alt+F11")
         assert len(menus) == 1
-        assert {x["id"]: x["enabled"] for x in backend.menu} == {"macros": True, "english": True, "translate": True, "native": False,
+        assert {x["id"]: x["enabled"] for x in backend.menu} == {"macros": True, "english": True, "reader": True, "native": False,
                                                                  "system": True, "": False, "application": False}
         assert enabled(2) == [False, True, True]
         assert enabled(4) == [True, True, True]
@@ -176,7 +181,7 @@ def test_click_segment_create_folder_save_and_navigate(tmp_path, monkeypatch):
         draft = window.property("draft").toVariant()
         folder_id = draft["folders"][0]["id"]
         assert draft["slots"][2] == "folder:" + folder_id
-        assert backend.config.value["slots"][2] == "translate", "Preview must not change live actions"
+        assert backend.config.value["slots"][2] == "reader", "Preview must not change live actions"
         click(named_item(window.contentItem(), "addFolderItem"))
         assert picker.property("visible")
         assert editor.property("pickerFolder") == folder_id
@@ -268,5 +273,101 @@ def test_click_outside_the_ring_closes_it(tmp_path, monkeypatch):
         backend.watch()
         assert hidden == [True]
     finally:
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)
+
+
+def test_language_edits_offer_clipboard_and_current_app_as_the_next_ring(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12")
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    front = {"hwnd": 1, "pid": 1, "started": 0, "process": "notepad++.exe", "title": ""}
+    monkeypatch.setattr(controller, "foreground", lambda: dict(front))
+    edits = []
+    monkeypatch.setattr(backend.engine, "edit_via", lambda action, target, via: edits.append((action, target["process"], via)))
+    try:
+        backend.hotkey("Ctrl+Alt+F11")
+        backend.hover(1)
+        assert [x["id"] for x in backend.children] == ["english_formal", "english_social"]
+        assert backend.variants == []
+        backend.hoverChild(0)
+        assert [(x["id"], x["name"], x["title"], x["enabled"]) for x in backend.variants] == [
+            ("english_formal@app", "Current app", "Fix EN · Formal · Current app", True),
+            ("english_formal@clipboard", "Clipboard", "Fix EN · Formal · Clipboard", True)]
+        assert all(x["inner"] == backend.children[0]["outer"] < x["outer"] <= 298 for x in backend.variants)
+        backend.hoverChild(1)
+        assert backend.variants[1]["id"] == "english_social@clipboard"
+        backend.hover(3)
+        assert [x["id"] for x in backend.children] == ["native@app", "native@clipboard"] and backend.variants == []
+        assert backend.children[0]["title"] == "Fix CZ · Current app"
+        backend.hover(2)
+        backend.hoverChild(0)
+        assert [x["id"] for x in backend.variants] == ["translate_selection", "translate_region", "translate_clipboard"]
+        backend.hoverChild(1)
+        assert [x["id"] for x in backend.variants] == ["explain_selection", "explain_region", "explain_clipboard"]
+        backend._limit = "own"
+        assert [backend.action_item(x)["enabled"] for x in ("explain_selection", "explain_region", "explain_clipboard")] == [False, True, True]
+        backend._limit = "busy"
+        assert all(backend.action_item(x)["enabled"] for x in ("explain_selection", "explain_region", "explain_clipboard"))
+        backend._limit = ""
+        backend.execute("english_social@app")
+        backend.thread.join(2)
+        assert edits == [("english_social", "notepad++.exe", "app")]
+        front.update(pid=os.getpid(), process="python.exe")
+        backend.hotkey("Ctrl+Alt+F11")
+        backend.hover(1)
+        backend.hoverChild(0)
+        assert [x["enabled"] for x in backend.variants] == [False, True]
+    finally:
+        backend.close()
+        app.removeNativeEventFilter(backend.hotkeys)
+
+
+@pytest.mark.parametrize("slot,branch,children,variants", [
+    (1, 0, ["english_formal", "english_social"], ["english_formal@app", "english_formal@clipboard"]),
+    (2, 0, ["translate", "explain"], ["translate_selection", "translate_region", "translate_clipboard"]),
+    (2, 1, ["translate", "explain"], ["explain_selection", "explain_region", "explain_clipboard"]),
+])
+def test_pointer_reaches_the_third_ring_and_clicks_a_variant(tmp_path, monkeypatch, slot, branch, children, variants):
+    from PySide6.QtQuick import QQuickView
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    config = copy.deepcopy(DEFAULT)
+    config.update(hotkey="Ctrl+Alt+F11", stopHotkey="Ctrl+Alt+F12")
+    (tmp_path / "settings.json").write_text(json.dumps(config), "utf-8")
+    app = QApplication.instance() or QApplication([])
+    backend = Controller(app)
+    backend.monitor.stop()
+    monkeypatch.setattr(controller, "foreground", lambda: {"hwnd": 1, "pid": 1, "started": 0, "process": "notepad++.exe", "title": ""})
+    executed = []
+    view = QQuickView()
+    view.rootContext().setContextProperty("backend", backend)
+    view.setSource(QUrl.fromLocalFile(str(Path(desktop_ai_assistant.__file__).parent / "qml/Overlay.qml")))
+    view.resize(720, 720)
+    view.show()
+    try:
+        backend.hotkey("Ctrl+Alt+F11")
+        monkeypatch.setattr(backend, "execute", executed.append)
+        def at(radius, angle):
+            from desktop_ai_assistant.geometry import point
+            x, y = point(360, 360, radius, angle)
+            return QPointF(x, y).toPoint()
+        QTest.mouseMove(view, at(113, -90 + slot * 45))
+        QTest.qWait(300)
+        assert [x["id"] for x in backend.children] == children
+        formal = backend.children[branch]
+        QTest.mouseMove(view, at(194, (formal["start"] + formal["end"]) / 2))
+        QTest.qWait(300)
+        assert [x["id"] for x in backend.variants] == variants
+        clipboard = backend.variants[-1]
+        QTest.mouseMove(view, at(266, (clipboard["start"] + clipboard["end"]) / 2))
+        QTest.mouseClick(view, Qt.LeftButton, pos=at(266, (clipboard["start"] + clipboard["end"]) / 2))
+        assert executed == [variants[-1]]
+    finally:
+        view.close()
         backend.close()
         app.removeNativeEventFilter(backend.hotkeys)

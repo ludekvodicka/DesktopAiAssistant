@@ -8,7 +8,7 @@ import tempfile
 import time
 import psutil
 from .config import data_dir
-from .text import IMAGE_SCHEMA, SCHEMA, prompt, question_prompt, translation_prompt, validate_answer, validate_result, validate_translation
+from .text import IMAGE_SCHEMA, SCHEMA, explanation_prompt, prompt, question_prompt, translation_prompt, validate_answer, validate_explanation, validate_result, validate_translation
 
 
 CLAUDE_ARGS = ["-p", "--tools", "", "--safe-mode", "--no-session-persistence", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
@@ -160,6 +160,12 @@ def translate(config, source, cancel):
     schema = IMAGE_SCHEMA if source["format"] == "image" else SCHEMA
     return validate_translation(source, invoke(config, request, schema, cancel, source["image"], timeout=180))
 
+
+
+def explain(config, source, cancel):
+    request = explanation_prompt(config["nativeLanguage"], source["format"], source["text"], config["rules"]["explain"])
+    schema = IMAGE_SCHEMA if source["format"] == "image" else SCHEMA
+    return validate_explanation(source, invoke(config, request, schema, cancel, source["image"], timeout=180))
 
 
 def answer(config, source, translation, conversation, question, cancel):

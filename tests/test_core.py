@@ -31,8 +31,8 @@ def test_restart_migration_preserves_slots_and_runs_only_once(tmp_path, monkeypa
     path = tmp_path / "settings.json"
     path.write_text(json.dumps(old), "utf-8")
     config = Config()
-    assert config.value["slots"] == ["macros", "english", "system", "native", "history", "translate", "application", ""]
-    assert json.loads(path.read_text("utf-8"))["version"] == 5
+    assert config.value["slots"] == ["macros", "english", "system", "native", "history", "reader", "application", ""]
+    assert json.loads(path.read_text("utf-8"))["version"] == 6
     config.value["slots"][2] = ""
     config.save(config.value)
     assert "system" not in Config().value["slots"]
@@ -50,7 +50,7 @@ def test_system_migration_preserves_direct_restart_and_custom_configuration(tmp_
     old["slotAppearance"][2] = {"name": "My tools"}
     (tmp_path / "settings.json").write_text(json.dumps(old), "utf-8")
     config = Config()
-    assert config.value["slots"] == ["history", "english", "system", "native", "translate", "", "application", ""]
+    assert config.value["slots"] == ["history", "english", "system", "native", "reader", "", "application", ""]
     for key in ("bindings", "folders", "slotAppearance", "profiles"):
         assert config.value[key] == old[key]
     assert Config().value == config.value
@@ -90,9 +90,9 @@ def test_schema5_migrates_live_shape_once(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps(old), "utf-8")
     value = Config().value
-    assert value["version"] == 5 and value["nativeLanguage"] == "cs"
-    assert value["slots"] == ["macros", "english", "translate", "native", "system", "", "application", ""]
-    assert value["rules"] == {"english_formal": "", "english_social": "", "native": "", "translate": ""}
+    assert value["version"] == 6 and value["nativeLanguage"] == "cs"
+    assert value["slots"] == ["macros", "english", "reader", "native", "system", "", "application", ""]
+    assert value["rules"] == {"english_formal": "", "english_social": "", "native": "", "translate": "", "explain": ""}
     assert json.loads(path.read_text("utf-8")) == value
     saved = path.stat().st_mtime_ns
     assert Config().value == value
@@ -110,7 +110,7 @@ def test_schema5_renames_czech_everywhere_and_keeps_custom_rule():
                macros=[{"id": "fix", "name": "Fix", "steps": [{"type": "ai", "value": "czech"}, {"type": "text", "value": "czech"}]}])
     value = validate(old)
     assert value["slots"] == ["macros", "english", "native", "folder:tools", "system", "history", "application", "settings"], "No empty slot: translate is not placed"
-    assert value["rules"] == {"english_formal": "", "english_social": "", "native": "Tykej", "translate": ""}
+    assert value["rules"] == {"english_formal": "", "english_social": "", "native": "Tykej", "translate": "", "explain": ""}
     assert value["appearance"] == {"native": {"name": "Moje"}}
     assert value["folders"][0]["actions"] == ["native", "settings"]
     assert value["profiles"][0]["actions"] == ["native"]
@@ -130,7 +130,7 @@ def test_schema5_validation():
     with pytest.raises(ValueError, match="Unknown native language"):
         validate({**DEFAULT, "nativeLanguage": "xx"})
     with pytest.raises(ValueError, match="Unsupported settings version"):
-        validate({**DEFAULT, "version": 6})
+        validate({**DEFAULT, "version": 7})
     value = copy.deepcopy(DEFAULT)
     value["macros"][0]["steps"][0]["value"] = "translate"
     with pytest.raises(ValueError, match="Unknown language action"):
@@ -151,6 +151,74 @@ def test_native_prompt_names_the_language():
         prompt("czech", "Ahoj", "cs")
     with pytest.raises(ValueError, match="Unknown language action"):
         prompt("translate", "Ahoj", "cs")
+
+
+def test_schema6_wraps_translate_and_keeps_leaf_bindings_and_rules(tmp_path, monkeypatch):
+    monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+    old = copy.deepcopy(DEFAULT)
+    old.update(version=5, slots=["translate", "native", "", "", "", "", "", ""],
+               folders=[{"id": "tools", "name": "Tools", "actions": ["translate", "translate_region"]}],
+               profiles=[{"id": "mail", "name": "Mail", "process": "mail.exe", "actions": ["translate"]}],
+               appearance={"translate": {"icon": "T"}},
+               bindings=[{"key": "Ctrl+Alt+T", "action": "translate_clipboard"}])
+    old["rules"].pop("explain")
+    old["rules"]["translate"] = "Tykej"
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(old), "utf-8")
+    value = Config().value
+    assert value["version"] == 6 and value["slots"][0] == "reader"
+    assert value["folders"][0]["actions"] == ["reader", "translate_region"]
+    assert value["profiles"][0]["actions"] == ["reader"]
+    assert value["appearance"] == {"reader": {"icon": "T"}}
+    assert value["bindings"] == old["bindings"] and value["rules"]["translate"] == "Tykej"
+    assert value["rules"]["explain"] == "" and json.loads(path.read_text("utf-8")) == value
+    value["slots"][0] = "translate"
+    assert validate(value)["slots"][0] == "translate", "A newly chosen direct Translate group remains available"
+    for action in ("explain_selection", "explain_region", "explain_clipboard"):
+        value["bindings"][0]["action"] = action
+        assert validate(value)
+    for action in ("reader", "translate", "explain"):
+        value["bindings"][0]["action"] = action
+        with pytest.raises(ValueError, match="shortcut"):
+            validate(value)
+
+
+@pytest.mark.parametrize("form", ["plain", "markdown", "image"])
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_direct_explanation_uses_the_source_once(monkeypatch, tmp_path, form, provider):
+    config = copy.deepcopy(DEFAULT)
+    config["provider"] = provider
+    config["rules"]["explain"] = "Použij příklad"
+    result = {"text": "**Význam:** něco vysvětluje."}
+    if form == "image":
+        result["source"] = "A diagram with two arrows"
+    if provider == "claude":
+        output = json.dumps({"type": "result", "subtype": "success", "structured_output": result})
+    elif provider == "codex":
+        output = codex_output(result)
+    else:
+        raise ValueError(provider)
+    calls = fake_cli(monkeypatch, tmp_path, output)
+    source = {"kind": "clipboard", "format": form, "text": "Czech text", "image": PNG if form == "image" else None, "origin": "Clipboard"}
+    explained = providers.explain(config, source, threading.Event())
+    assert explained == {"source": result.get("source", "Czech text"), "text": result["text"], "warning": ""}
+    assert len(calls) == 1 and calls[0]["timeout"] == 180
+    request = calls[0]["stdin"]
+    if provider == "claude" and form == "image":
+        request = json.loads(request)["message"]["content"][1]["text"]
+    assert "explanation in Czech as Markdown" in request and "Použij příklad" in request
+    assert "Never use tools" in request and "already in Czech" in request
+
+
+def test_explanation_validates_source_and_answer():
+    from desktop_ai_assistant.text import explanation_prompt, validate_explanation
+    with pytest.raises(ValueError, match="1 to 20,000"):
+        explanation_prompt("cs", "plain", " ")
+    for result in ({"text": ""}, {"text": 42}, {"text": "x", "extra": "x"}):
+        with pytest.raises(ValueError):
+            validate_explanation({"format": "plain", "text": "Hello"}, result)
+    with pytest.raises(ValueError, match="image description"):
+        validate_explanation({"format": "image"}, {"source": "", "text": "Vysvětlení"})
 
 
 def test_history_is_encrypted_and_interrupted_work_is_recoverable(tmp_path):
@@ -342,4 +410,4 @@ def test_clean_jobs_removes_only_job_folders(tmp_path, monkeypatch):
 
 def test_schema4_drops_unknown_rule_keys_instead_of_failing():
     old = {"version": 4, "rules": {"english_formal": "", "english_social": "", "czech": "Tykej", "legacy": "x"}}
-    assert validate(old)["rules"] == {"english_formal": "", "english_social": "", "native": "Tykej", "translate": ""}
+    assert validate(old)["rules"] == {"english_formal": "", "english_social": "", "native": "Tykej", "translate": "", "explain": ""}

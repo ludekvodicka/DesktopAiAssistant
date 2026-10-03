@@ -8,6 +8,7 @@ import pythoncom
 import win32gui
 from .winapi import same_target, target_exists, send_keys, wait_modifiers
 from .input_monitor import InputMonitor
+from .scintilla import Scintilla
 
 
 TERMINAL_CLASSES = ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "PuTTY", "VirtualConsoleClass")
@@ -64,9 +65,24 @@ def _worker(connection, revision):
             element = automation.GetFocusedElement()
         if not element or element.CurrentProcessId != target["pid"] or element.CurrentIsPassword or not element.CurrentIsEnabled:
             raise RuntimeError("No supported editable field is focused")
+        hwnd = element.CurrentNativeWindowHandle
+        if hwnd and win32gui.GetClassName(hwnd) == "Scintilla":
+            editor = Scintilla(hwnd, message)
+            try:
+                if editor.readonly():
+                    raise RuntimeError("This field is read-only")
+                full, start, end = editor.read()
+            finally:
+                editor.close()
+            whole = start == end
+            snapshot = {"kind": "windows", "target": target, "element": list(element.GetRuntimeId()), "scintilla": hwnd,
+                        "full": full, "text": full if whole else full[start:end], "start": 0 if whole else start,
+                        "end": len(full) if whole else end, "selectionStart": start, "selectionEnd": end}
+            if len(full) > 200000:
+                raise RuntimeError("This field is too large")
+            return snapshot, None
         if element.CurrentControlType not in (50004, 50030):
             raise RuntimeError("Focus a text editor first")
-        hwnd = element.CurrentNativeWindowHandle
         classname = element.CurrentClassName.lower()
         if hwnd and (classname == "edit" or "richedit" in classname and target["process"].lower() == "notepad.exe"):
             if win32gui.GetWindowLong(hwnd, -16) & (0x0800 | 0x0020):
@@ -155,6 +171,20 @@ def _worker(connection, revision):
                         result.update(token=original.get("token"), background=not same_target(original["target"]))
                         connection.send({"ok": True, "value": result})
                         continue
+                    if original.get("scintilla"):
+                        editor = Scintilla(original["scintilla"], message)
+                        try:
+                            if editor.read()[0] != original["full"]:
+                                raise RuntimeError("The original text changed; result kept in History")
+                            editor.replace(original["full"], original["start"], original["end"], replacement)
+                        finally:
+                            editor.close()
+                        result, _ = read(original["target"], element)
+                        if result["full"] != expected:
+                            raise RuntimeError("Write was not verified; do not repeat automatically")
+                        result.update(token=original.get("token"), background=not same_target(original["target"]))
+                        connection.send({"ok": True, "value": result})
+                        continue
                     focused = same_target(original["target"]) and automation.CompareElements(element, automation.GetFocusedElement())
                     if relaxed and not focused:
                         value = None
@@ -235,7 +265,42 @@ def _worker(connection, revision):
                     finally:
                         clipboard.restore(saved, copied)
                     # Converted after the restore, so a slow conversion of a large page cannot cost the user's clipboard.
-                    result = source_from_mime(selection, "selection", target["process"], "The copied content has no text")
+                    if request.get("plain"):
+                        if not selection.hasFormat("text/plain") or not selection.text().strip():
+                            raise RuntimeError("The copied content has no text")
+                        result = {"kind": "selection", "format": "plain", "text": selection.text(), "image": None, "origin": target["process"]}
+                    else:
+                        result = source_from_mime(selection, "selection", target["process"], "The copied content has no text")
+                elif request["op"] == "paste":
+                    target = request["target"]
+                    if not same_target(target):
+                        raise RuntimeError("The window changed")
+                    previous, sequence = clipboard.replace(request["text"])
+                    try:
+                        if revision.value != request["tick"]:
+                            raise RuntimeError("You used the keyboard or mouse in the meantime")
+                        send_keys("Ctrl+V", target)
+                        # Windows reports no moment when the editor has read the clipboard.
+                        deadline = time.monotonic() + 0.8
+                        while time.monotonic() < deadline:
+                            clipboard.app.processEvents()
+                            time.sleep(0.02)
+                    finally:
+                        clipboard.restore(previous, sequence)
+                    result = True
+                elif request["op"] == "read_clipboard":
+                    mime = clipboard.clipboard.mimeData()
+                    # Qt 6 hasText() is also true for file URLs alone.
+                    if mime is None or not mime.hasFormat("text/plain") or not mime.text().strip():
+                        raise RuntimeError("The clipboard has no text")
+                    result = mime.text()
+                elif request["op"] == "write_clipboard":
+                    clipboard.clipboard.setText(request["text"])
+                    if not clipboard.clipboard.ownsClipboard():
+                        raise RuntimeError("Could not write the clipboard")
+                    # The text stays available after the worker stops.
+                    pythoncom.OleFlushClipboard()
+                    result = True
                 else:
                     raise ValueError("Unknown text operation")
                 connection.send({"ok": True, "value": result})
@@ -316,12 +381,23 @@ class WindowsText:
             raise RuntimeError("Terminal input is not supported")
         return self.call({"op": "capture", "target": target})
 
-    def copy_selection(self, target):
+    def copy_selection(self, target, plain=False):
         if terminal(target):
             raise RuntimeError("Terminal text is not supported")
         # A direct shortcut can still be held; waiting inside the worker would hold the call lock.
         wait_modifiers()
-        return self.call({"op": "copy", "target": target})
+        return self.call({"op": "copy", "target": target, "plain": plain})
+
+    def paste(self, target, text, tick):
+        if terminal(target):
+            raise RuntimeError("Terminal input is not supported")
+        return self.call({"op": "paste", "target": target, "text": text, "tick": tick})
+
+    def read_clipboard(self):
+        return self.call({"op": "read_clipboard"})
+
+    def write_clipboard(self, text):
+        return self.call({"op": "write_clipboard", "text": text})
 
     def apply(self, snapshot, text, tick=None, allow_background=False):
         return self.call({"op": "apply", "snapshot": snapshot, "text": text, "tick": tick, "allowBackground": allow_background})

@@ -31,7 +31,7 @@ ScrollView {
             }
         }
         Repeater {
-            model: [{id: 'english_formal', description: 'Professional wording, grammar and capitalization.'}, {id: 'english_social', description: 'Natural chat wording while preserving tone and emoji.'}, {id: 'native', description: 'Corrects text in your native language or translates into it.'}, {id: 'translate', description: 'Extra instructions for translations shown in the reader.'}]
+            model: [{id: 'english_formal', description: 'Professional wording, grammar and capitalization.'}, {id: 'english_social', description: 'Natural chat wording while preserving tone and emoji.'}, {id: 'native', description: 'Corrects text in your native language or translates into it.'}, {id: 'translate', description: 'Extra instructions for translations shown in the reader.'}, {id: 'explain', description: 'Extra instructions for explanations shown in the reader.'}]
             delegate: GroupBox {
                 required property var modelData
                 objectName: 'ruleBox_' + modelData.id

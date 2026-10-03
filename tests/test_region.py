@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
-from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtTest import QTest
 import desktop_ai_assistant
 from desktop_ai_assistant import region as region_module
@@ -99,6 +99,59 @@ def test_overlay_drag_emits_the_dragged_region(picker, monkeypatch, app):
     QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, QPoint(10, 10))
     assert [single_color(png) for png in picker.pngs] == [(40, 30, {"#ff0000"})]
     assert picker.windows == []
+
+
+@pytest.mark.parametrize("reverse_x,reverse_y", [(False, False), (False, True), (True, False), (True, True)])
+def test_ctrl_moves_the_whole_region_then_resumes_resizing(picker, monkeypatch, app, reverse_x, reverse_y):
+    screen = app.primaryScreen()
+    shot = marked(400, 300, QRect(80, 70, 110, 85))
+    monkeypatch.setattr(region_module.QGuiApplication, "screens", staticmethod(lambda: [screen]))
+    monkeypatch.setattr(screen, "grabWindow", lambda window: shot)
+    picker.grab()
+    window = picker.windows[0]
+    window.resize(400, 300)
+    picker.areas = [QRect(0, 0, 400, 300)]
+    assert QTest.qWaitForWindowExposed(window)
+    band = window.findChild(QObject, "regionBand")
+
+    def bounds():
+        return tuple(band.property(key) for key in ("x", "y", "width", "height"))
+
+    def move(x, y, ctrl=False):
+        point = QPointF(x, y)
+        event = QMouseEvent(QEvent.MouseMove, point, point, Qt.NoButton, Qt.LeftButton, Qt.ControlModifier if ctrl else Qt.NoModifier)
+        app.sendEvent(window, event)
+
+    start = QPoint(150 if reverse_x else 50, 130 if reverse_y else 50)
+    end = QPoint(50 if reverse_x else 150, 50 if reverse_y else 130)
+    QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, start)
+    move(end.x(), end.y())
+    assert bounds() == (50, 50, 100, 80)
+    move(end.x() + 30, end.y() + 20, True)
+    assert bounds() == (80, 70, 100, 80)
+    dx, dy = (-10 if reverse_x else 10), (-5 if reverse_y else 5)
+    finish = end + QPoint(30 + dx, 20 + dy)
+    move(finish.x(), finish.y())
+    assert bounds() == (70 if reverse_x else 80, 65 if reverse_y else 70, 110, 85)
+    QTest.mouseRelease(window, Qt.LeftButton, Qt.NoModifier, finish)
+    image = QImage.fromData(picker.pngs[0], "PNG")
+    assert (image.width(), image.height()) == (110, 85)
+    assert picker.windows == []
+
+
+def test_ctrl_move_clamps_at_edges_without_changing_size(picker, monkeypatch, app):
+    windows = fake_grab(picker, monkeypatch, app)
+    window = windows[0]
+    assert QTest.qWaitForWindowExposed(window)
+    band = window.findChild(QObject, "regionBand")
+    QTest.mousePress(window, Qt.LeftButton, Qt.NoModifier, QPoint(50, 50))
+    QTest.mouseMove(window, QPoint(150, 130))
+    for point, expected in [(QPointF(-500, -500), (0, 0)),
+                            (QPointF(window.width() + 500, window.height() + 500), (window.width() - 100, window.height() - 80))]:
+        app.sendEvent(window, QMouseEvent(QEvent.MouseMove, point, point, Qt.NoButton, Qt.LeftButton, Qt.ControlModifier))
+        assert (band.property("x"), band.property("y")) == expected
+        assert (band.property("width"), band.property("height")) == (100, 80)
+    picker.cancel()
 
 
 @pytest.mark.parametrize("gesture", ["right", "escape"])
