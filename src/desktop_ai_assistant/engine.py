@@ -5,9 +5,8 @@ import threading
 from urllib.parse import urlparse
 import win32gui
 from . import providers
-from .text import TAGS
-from .winapi import same_target, target_exists, send_keys, activate
-from .windows_text import terminal
+from .text import TAGS, TextAccessDenied
+from .winapi import same_target, target_exists, send_keys, activate, terminal
 
 
 class Engine:
@@ -35,21 +34,35 @@ class Engine:
     def capture(self, target):
         if not same_target(target):
             raise RuntimeError("The original window is no longer active")
-        if target["process"].lower() in ("chrome.exe", "msedge.exe"):
+        if self.browser is not None and self.browser.supports(target):
             return self.browser.capture(target)
         return self.windows.capture(target)
 
     def read_selection(self, target):
         if terminal(target):
             raise RuntimeError("Terminal text is not supported")
+        if not same_target(target):
+            raise RuntimeError("The original window is no longer active")
         try:
-            snapshot = self.capture(target)
-        except RuntimeError:
+            return self.windows.read_selection(target)
+        except TextAccessDenied:
+            raise
+        except (RuntimeError, TimeoutError):
             if not same_target(target):
                 raise
-            return self.windows.copy_selection(target)
-        text = html.unescape(TAGS.sub("", snapshot["text"])) if snapshot.get("rich") else snapshot["text"]
-        return {"kind": "selection", "format": "plain", "text": text, "image": None, "origin": target["process"]}
+        if self.browser is not None and self.browser.supports(target):
+            try:
+                snapshot = self.browser.capture(target)
+                if not same_target(target):
+                    raise TextAccessDenied("The original window is no longer active")
+                text = html.unescape(TAGS.sub("", snapshot["text"])) if snapshot.get("rich") else snapshot["text"]
+                return {"kind": "selection", "format": "plain", "text": text, "image": None, "origin": target["process"]}
+            except TextAccessDenied:
+                raise
+            except (RuntimeError, TimeoutError):
+                if not same_target(target):
+                    raise
+        return self.windows.copy_selection(target)
 
     def apply(self, snapshot, text, tick):
         if self.cancel.is_set():
@@ -61,13 +74,21 @@ class Engine:
         else:
             raise ValueError("Unknown text adapter")
 
-    def edit(self, action, target, literal=None):
+    def edit(self, action, target, literal=None, via=None):
         self.progress("Reading the focused editor…")
         self.invalidated.clear()
         self.edit_target = target
         initial_tick = self.windows.input_tick()
         try:
-            snapshot = self.capture(target)
+            if via == "uia":
+                if not same_target(target):
+                    raise RuntimeError("The original window is no longer active")
+                snapshot = self.windows.capture(target)
+                snapshot["foregroundOnly"] = True
+            elif via is None:
+                snapshot = self.capture(target)
+            else:
+                raise ValueError("Unknown text source")
         except Exception:
             self.edit_target = None
             raise
@@ -79,7 +100,7 @@ class Engine:
             snapshot["start"] = snapshot.get("selectionStart", snapshot.get("start", 0))
             snapshot["end"] = snapshot.get("selectionEnd", snapshot.get("end", 0))
             snapshot["insert"] = True
-        job = self.history.create({"action": action, "source": target["process"], "original": snapshot["text"], "snapshot": snapshot,
+        job = self.history.create({"action": action, "via": via, "source": target["process"], "original": snapshot["text"], "snapshot": snapshot,
                                    "provider": self.config.value["provider"], "rulesVersion": 1, "language": self.config.value["nativeLanguage"],
                                    "rules": self.config.value["rules"].get(action, ""), "model": self.config.value["models"][self.config.value["provider"]]})
         try:
@@ -133,6 +154,8 @@ class Engine:
             self.edit_target = None
 
     def edit_via(self, action, target, via):
+        if via == "uia":
+            return self.edit(action, target, via=via)
         if via == "clipboard":
             self.progress("Reading the clipboard…")
             text, source, tick = self.windows.read_clipboard(), "Clipboard", None

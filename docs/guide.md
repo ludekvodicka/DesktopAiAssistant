@@ -14,7 +14,13 @@ Use **New submenu** to group up to six actions. Submenus may contain other subme
 
 **Fix EN → Formal** and **Fix EN → Social** correct English or translate any language into the corresponding English style. **Fix CZ** corrects text in your native language or translates into it, and keeps the original formality and form of address. Custom rules complement the built-in formatting and protected-literal checks.
 
-A click on Formal, Social or Fix CZ edits the focused field through its adapter. Hover over the action to choose another source in the next ring: **Current app** copies the selection with Ctrl+C and pastes the result with Ctrl+V, for example in a browser without the extension; **Clipboard** fixes the text in the clipboard and puts the result back there. Both use plain text. Notepad++ is edited directly, also in the background.
+A click on Formal, Social or Fix CZ edits the focused field through its adapter. Hover over the action to choose another source in the next ring:
+
+- **Current app** copies the selection with Ctrl+C and pastes the result with Ctrl+V.
+- **UIA plain text** reads through Windows accessibility, including supported browser controls without an extension. It uses the selection or, with a caret, the whole editable field. It checks the original field and text before insertion and verifies the result. Browser and other UIA paste operations wait for the original field to regain focus.
+- **Clipboard** fixes the text in the clipboard and puts the result back there.
+
+All three choices use plain text and can remove formatting in the replaced part. The default browser action still uses the extension to preserve Gmail formatting. Notepad++ retains its direct Scintilla adapter, including background writes.
 
 The native language can be Czech (CZ, the default), Slovak, Polish, German, English, French, Spanish, Italian, Hungarian, or Ukrainian. The labels **Fix CZ**, **Translate to CZ**, and **Explain in CZ** use its short code. A language change shows in the editor previews at once and in the ring after Save, without a restart. A custom segment name keeps priority. Settings from earlier versions are migrated once on the first start; earlier versions cannot read the migrated file.
 
@@ -24,7 +30,7 @@ The native language can be Czech (CZ, the default), Slovak, Polish, German, Engl
 
 **Explain in CZ** directly explains the meaning, terms and relevant context of the source, including text already in Czech. For an image, it can also explain a diagram or other visible content. It opens the explanation in the reader with **Copy explanation**, **Show original**, **Retry**, and follow-up questions. Extra explanation instructions are configured under **Languages**.
 
-- **Selection** reads the selected text in an editor, web page, or application. In a supported editor with no selection, it uses the whole field. When the editor adapters cannot read the content, the app sends Ctrl+C to the window in front, reads the copied formatted or plain text, and restores your previous clipboard if nothing else changed it. The copied selection can still appear in the Windows clipboard history (Win+V). Some applications copy the current line when nothing is selected. Terminals are refused, and elevated windows ignore the keys.
+- **Selection** first reads through Windows accessibility, including browser text and read-only fields, without touching the clipboard. In an editable field with a caret, it uses the whole field; a web page requires a selection. If accessibility is unavailable, it tries the browser extension and then Ctrl+C, restoring your previous clipboard if nothing else changed it. The copied fallback selection can still appear in Windows clipboard history (Win+V). Some applications copy the current line when nothing is selected. Password fields, ambiguous multiple selections and terminals are refused.
 - **Region** freezes every screen. Drag a rectangle on one screen, holding **Ctrl** to move the whole rectangle without changing its size. Release Ctrl to resume resizing, and release the mouse to submit. The rectangle stays within that screen. Esc, a right click, the stop shortcut, or a very small drag cancels. The cropped image goes to the AI provider for translation or explanation; there is no local text recognition.
 - **Clipboard** translates formatted text, plain text, or an image from the clipboard. Files and an empty clipboard are refused.
 

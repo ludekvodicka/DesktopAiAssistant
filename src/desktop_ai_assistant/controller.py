@@ -31,8 +31,7 @@ TITLES = {"english_formal": "Fix EN · Formal", "english_social": "Fix EN · Soc
 ICONS = {"english": "Aa", "english_formal": "Aa", "english_social": "hi", "translate": "⇄", "translate_selection": "¶", "translate_region": "⬚", "translate_clipboard": "⎘",
          "reader": "?", "explain": "?", "explain_selection": "¶", "explain_region": "⬚", "explain_clipboard": "⎘",
          "macros": "⌘", "application": "▦", "system": "⚙", "history": "↶", "settings": "⚙", "restart": "↻", "jamat_new": "+", "jamat_remarkable": "▤"}
-# Where a language edit reads and writes its text instead of the editor adapter.
-VIA = {"app": ("Current app", "✎"), "clipboard": ("Clipboard", "⎘")}
+VIA = {"app": ("Current app", "✎"), "uia": ("UIA plain text", "¶"), "clipboard": ("Clipboard", "⎘")}
 CATALOG = ["english", "english_formal", "english_social", "native", "reader", "translate", "explain", *TRANSLATIONS, *EXPLANATIONS, "macros",
            "application", "system", "history", "settings", "restart", "jamat_new", "jamat_remarkable"]
 

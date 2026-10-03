@@ -2,6 +2,11 @@ import collections
 import json
 import re
 
+
+class TextAccessDenied(RuntimeError):
+    pass
+
+
 LANGUAGES = {  # code: (short label, prompt name, ring icon)
     "cs": ("CZ", "Czech", "Čž"), "sk": ("SK", "Slovak", "Šť"), "pl": ("PL", "Polish", "Łż"),
     "de": ("DE", "German", "Äß"), "en": ("EN", "English", "Aa"), "fr": ("FR", "French", "Éç"),

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Desktop AI UIA fixture</title>
+<body>
+<label>Single line<input id="single" value="Hello world 🙂" aria-label="Single line"></label>
+<label>Multiple lines<textarea id="multi" aria-label="Multiple lines">Hello world 🙂
+Second line</textarea></label>
+<div id="rich" role="textbox" aria-label="Rich editor" contenteditable="true">Hello <b>world</b> 🙂</div>
+<label>Read only<input id="readonly" readonly value="Read only text" aria-label="Read only"></label>
+<label>Password<input id="password" type="password" value="synthetic-secret" aria-label="Password"></label>
+<p id="page">Selected page content with no editor.</p>
+<script>
+const range = document.createRange();
+range.setStart(document.getElementById('page').firstChild, 0);
+range.setEnd(document.getElementById('page').firstChild, 21);
+getSelection().removeAllRanges();
+getSelection().addRange(range);
+</script>
+</body>
+</html>

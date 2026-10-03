@@ -69,6 +69,20 @@ def target_exists(target):
         return False
 
 
+TERMINAL_CLASSES = ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "PuTTY", "VirtualConsoleClass")
+
+
+def terminal(target):
+    name = target["process"].lower()
+    if any(x in name for x in ("terminal", "powershell", "pwsh", "cmd.exe", "conhost", "wezterm", "putty", "mintty", "bash", "wsl", "alacritty", "conemu", "tabby", "hyper")):
+        return True
+    # Ctrl+C interrupts a terminal process; the window class also catches terminals with unknown process names.
+    try:
+        return win32gui.GetClassName(target.get("hwnd", 0)) in TERMINAL_CLASSES
+    except win32gui.error:
+        return False
+
+
 class KeyboardInput(C.Structure):
     _fields_ = [("wVk", W.WORD), ("wScan", W.WORD), ("dwFlags", W.DWORD), ("time", W.DWORD), ("dwExtraInfo", C.c_size_t)]
 

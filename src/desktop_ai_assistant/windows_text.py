@@ -6,23 +6,11 @@ import ctypes as C
 from ctypes import wintypes as W
 import pythoncom
 import win32gui
-from .winapi import same_target, target_exists, send_keys, wait_modifiers
+from .winapi import same_target, target_exists, send_keys, wait_modifiers, terminal
 from .input_monitor import InputMonitor
 from .scintilla import Scintilla
-
-
-TERMINAL_CLASSES = ("ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS", "mintty", "PuTTY", "VirtualConsoleClass")
-
-
-def terminal(target):
-    name = target["process"].lower()
-    if any(x in name for x in ("terminal", "powershell", "pwsh", "cmd.exe", "conhost", "wezterm", "putty", "mintty", "bash", "wsl", "alacritty", "conemu", "tabby", "hyper")):
-        return True
-    # Ctrl+C interrupts a terminal process; the window class also catches terminals with unknown process names.
-    try:
-        return win32gui.GetClassName(target.get("hwnd", 0)) in TERMINAL_CLASSES
-    except win32gui.error:
-        return False
+from .uia_text import UiaText
+from .text import TextAccessDenied
 
 
 def _worker(connection, revision):
@@ -34,6 +22,7 @@ def _worker(connection, revision):
     clipboard = Clipboard()
     module = comtypes.client.GetModule("UIAutomationCore.dll")
     automation = comtypes.client.CreateObject(module.CUIAutomation, interface=module.IUIAutomation)
+    uia = UiaText(automation, module)
     records = {}
     send = C.WinDLL("user32", use_last_error=True).SendMessageTimeoutW
     send.argtypes = [W.HWND, W.UINT, C.c_size_t, C.c_ssize_t, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
@@ -56,20 +45,19 @@ def _worker(connection, revision):
         encoded = buffer.value.encode("utf-16-le")
         return buffer.value, len(encoded[:start.value * 2].decode("utf-16-le")), len(encoded[:end.value * 2].decode("utf-16-le"))
 
-    def read(target, element=None):
+    def read(target, element=None, read_only=False, verify_only=False):
         if element is None and not same_target(target):
             raise RuntimeError("The active window changed")
         if not target_exists(target):
             raise RuntimeError("The original window no longer exists")
         if element is None:
             element = automation.GetFocusedElement()
-        if not element or element.CurrentProcessId != target["pid"] or element.CurrentIsPassword or not element.CurrentIsEnabled:
-            raise RuntimeError("No supported editable field is focused")
+        uia.ancestors(element, target)
         hwnd = element.CurrentNativeWindowHandle
         if hwnd and win32gui.GetClassName(hwnd) == "Scintilla":
             editor = Scintilla(hwnd, message)
             try:
-                if editor.readonly():
+                if not read_only and editor.readonly():
                     raise RuntimeError("This field is read-only")
                 full, start, end = editor.read()
             finally:
@@ -81,44 +69,20 @@ def _worker(connection, revision):
             if len(full) > 200000:
                 raise RuntimeError("This field is too large")
             return snapshot, None
-        if element.CurrentControlType not in (50004, 50030):
-            raise RuntimeError("Focus a text editor first")
         classname = element.CurrentClassName.lower()
         if hwnd and (classname == "edit" or "richedit" in classname and target["process"].lower() == "notepad.exe"):
-            if win32gui.GetWindowLong(hwnd, -16) & (0x0800 | 0x0020):
-                raise RuntimeError("This field is read-only or protected")
+            style = win32gui.GetWindowLong(hwnd, -16)
+            if style & 0x0020:
+                raise TextAccessDenied("Password fields cannot be read")
+            if not read_only and style & 0x0800:
+                raise RuntimeError("This field is read-only")
             full, start, end = native_read(hwnd)
             whole = start == end
             snapshot = {"kind": "windows", "target": target, "element": list(element.GetRuntimeId()), "native": hwnd,
                         "full": full, "text": full if whole else full[start:end], "start": 0 if whole else start,
                         "end": len(full) if whole else end, "selectionStart": start, "selectionEnd": end}
             return snapshot, None
-        try:
-            value = element.GetCurrentPattern(10002).QueryInterface(module.IUIAutomationValuePattern)
-            if value.CurrentIsReadOnly:
-                raise RuntimeError("This field is read-only")
-        except (comtypes.COMError, ValueError):
-            if "edit" not in element.CurrentClassName.lower():
-                raise RuntimeError("Editability cannot be verified for this field")
-        pattern = element.GetCurrentPattern(10014).QueryInterface(module.IUIAutomationTextPattern)
-        selection = pattern.GetSelection()
-        if not selection or selection.Length != 1:
-            raise RuntimeError("This editor does not expose a single text selection")
-        document = pattern.DocumentRange
-        full = document.GetText(-1)
-        selected = selection.GetElement(0)
-        prefix = document.Clone()
-        prefix.MoveEndpointByRange(1, selected, 0)
-        start = len(prefix.GetText(-1))
-        part = selected.GetText(-1)
-        end = start + len(part)
-        whole = start == end
-        snapshot = {"kind": "windows", "target": target, "element": list(element.GetRuntimeId()),
-                    "full": full, "text": full if whole else part, "start": 0 if whole else start,
-                    "end": len(full) if whole else end, "selectionStart": start, "selectionEnd": end}
-        if len(full) > 200000:
-            raise RuntimeError("This field is too large")
-        return snapshot, document if whole else selected
+        return uia.read(element, target, read_only, verify_only)
 
     try:
         while True:
@@ -129,16 +93,25 @@ def _worker(connection, revision):
             if request["op"] == "close":
                 break
             try:
-                if request["op"] == "capture":
+                if request["op"] in ("capture", "read_selection"):
                     element = automation.GetFocusedElement()
                     if not same_target(request["target"]):
                         raise RuntimeError("The active window changed")
-                    result, selected = read(request["target"], element)
-                    token = uuid.uuid4().hex
-                    records[token] = (element, selected)
-                    if len(records) > 100:
-                        del records[next(iter(records))]
-                    result["token"] = token
+                    hwnd = element.CurrentNativeWindowHandle if element else 0
+                    if not hwnd or win32gui.GetClassName(hwnd) != "Scintilla":
+                        element = uia.resolve(element, request["target"])
+                    reading = request["op"] == "read_selection"
+                    result, selected = read(request["target"], element, read_only=reading)
+                    if not same_target(request["target"]):
+                        raise TextAccessDenied("The active window changed while reading text")
+                    if reading:
+                        result = {"kind": "selection", "format": "plain", "text": result["text"], "image": None, "origin": request["target"]["process"]}
+                    else:
+                        token = uuid.uuid4().hex
+                        records[token] = (element, selected)
+                        if len(records) > 100:
+                            del records[next(iter(records))]
+                        result["token"] = token
                 elif request["op"] == "apply":
                     original = request["snapshot"]
                     relaxed = request.get("allowBackground", False)
@@ -146,7 +119,7 @@ def _worker(connection, revision):
                     if relaxed and retained is None:
                         raise RuntimeError("The original editor reference expired. Result kept in History.")
                     element = retained[0] if retained else automation.GetFocusedElement()
-                    current, selected_range = read(original["target"], element)
+                    current, selected_range = read(original["target"], element, verify_only=relaxed)
                     if relaxed and win32gui.GetWindowText(original["target"]["hwnd"]) != original["target"].get("title", ""):
                         raise RuntimeError("The original document or conversation changed. Result kept in History.")
                     keys = ("element", "full") if relaxed else ("element", "full", "selectionStart", "selectionEnd")
@@ -185,7 +158,7 @@ def _worker(connection, revision):
                         result.update(token=original.get("token"), background=not same_target(original["target"]))
                         connection.send({"ok": True, "value": result})
                         continue
-                    focused = same_target(original["target"]) and automation.CompareElements(element, automation.GetFocusedElement())
+                    focused = same_target(original["target"]) and uia.focused(element, original["target"])
                     if relaxed and not focused:
                         value = None
                         try:
@@ -195,11 +168,11 @@ def _worker(connection, revision):
                         except (comtypes.COMError, ValueError):
                             pass
                         # Some Qt editors interpret markup in SetValue as HTML.
-                        if value is None or "<" in expected:
+                        if value is None or "<" in expected or original.get("foregroundOnly"):
                             connection.send({"ok": True, "value": {"deferred": True}})
                             continue
                         value.SetValue(expected)
-                        result, _ = read(original["target"], element)
+                        result, _ = read(original["target"], element, verify_only=True)
                         if result["full"] != expected:
                             raise RuntimeError("Write was not verified; do not repeat automatically")
                         result.update(token=original.get("token"), background=True)
@@ -229,13 +202,13 @@ def _worker(connection, revision):
                     try:
                         if paste_tick is not None and revision.value != paste_tick:
                             raise RuntimeError("User input occurred; result kept in history")
-                        if not automation.CompareElements(element, automation.GetFocusedElement()):
+                        if not uia.focused(element, original["target"]):
                             raise RuntimeError("The focused editor changed; result kept in History")
                         paste_started = True
                         send_keys("Ctrl+V", original["target"])
                         deadline = time.monotonic() + 1.5
                         while time.monotonic() < deadline:
-                            current, _ = read(original["target"], element)
+                            current, _ = read(original["target"], element, verify_only=True)
                             if current["full"] == expected:
                                 verified = True
                                 break
@@ -307,7 +280,7 @@ def _worker(connection, revision):
             except Exception as error:
                 import traceback
                 traceback.print_exc()
-                connection.send({"ok": False, "error": str(error) or type(error).__name__})
+                connection.send({"ok": False, "error": str(error) or type(error).__name__, "denied": isinstance(error, TextAccessDenied)})
     except (EOFError, BrokenPipeError):
         pass
     finally:
@@ -359,6 +332,8 @@ class WindowsText:
                     message = "The editor helper stopped before text could be read. Try the action again."
                 raise RuntimeError(message) from error
             if not result["ok"]:
+                if result.get("denied"):
+                    raise TextAccessDenied(result["error"])
                 raise RuntimeError(result["error"])
             return result["value"]
 
@@ -374,12 +349,14 @@ class WindowsText:
             self.connection = None
 
     def capture(self, target):
-        name = target["process"].lower()
-        if name in ("chrome.exe", "msedge.exe", "firefox.exe"):
-            raise RuntimeError("Connect the browser extension to preserve formatting")
         if terminal(target):
             raise RuntimeError("Terminal input is not supported")
         return self.call({"op": "capture", "target": target})
+
+    def read_selection(self, target):
+        if terminal(target):
+            raise TextAccessDenied("Terminal text is not supported")
+        return self.call({"op": "read_selection", "target": target})
 
     def copy_selection(self, target, plain=False):
         if terminal(target):

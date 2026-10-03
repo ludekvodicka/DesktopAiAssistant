@@ -16,6 +16,18 @@ the visible desktop with activation disabled. Capture discovery is supplied by t
 not take focus; content reads, identities and background writes use the real Windows/UIA providers.
 The worker fails the test if an insertion attempts to use the clipboard or keyboard input.
 
+`test_browser_uia.py` is opt-in. Open `tests/fixtures/uia-browser.html` in an isolated headed
+Chromium browser without the extension, leaving its initial page selection intact. Set
+`DESKTOP_AI_UIA_BROWSER_HWND` to that fixture window's HWND and run the test with
+`QT_QPA_PLATFORM=windows`. It verifies the title, supplies control discovery, and tests the real
+UIA provider and worker process. It selects only synthetic fixture text and refuses keyboard or
+clipboard access. The fixture must be reloaded before repeating the test. This covers capture,
+protected/read-only fields and deferred insertion, not an actual browser paste or Gmail autosave.
+Adding `DESKTOP_AI_LIVE_TESTS=1` enables the separate foreground paste test on the same owned
+fixture. It needs an idle interactive desktop and skips if Windows refuses to activate that
+window. It exercises real UIA discovery, paste and full-text verification in input, textarea and
+contenteditable; no signed-in page is involved.
+
 Keep credentials, personal settings, history databases, provider jobs, real editor content, build output, and machine-specific paths out of contributions. Use reserved example domains and synthetic test data. Screenshots must come from an isolated demo configuration.
 
 Slow provider calls, UI Automation, and blocking operations belong in workers, not on the Qt event loop. Settings-format changes need versioned migration. Preserve target validation and cancellation.

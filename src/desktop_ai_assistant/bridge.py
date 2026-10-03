@@ -38,6 +38,10 @@ class BrowserBridge:
     lock: threading.Lock
     stopped: bool
 
+    @staticmethod
+    def supports(target):
+        return target["process"].lower() in ("chrome.exe", "msedge.exe", "firefox.exe")
+
     def __init__(self):
         address, key = credentials()
         self.listener = Listener(address, family="AF_PIPE", authkey=key)
@@ -99,7 +103,7 @@ class BrowserBridge:
         with self.lock:
             clients = list(self.clients)
         if not clients:
-            raise RuntimeError("Browser extension is disconnected. Open its popup and check Desktop connection, then reconnect.")
+            raise RuntimeError("Browser extension is disconnected. Choose UIA plain text to edit without it, or connect the extension to preserve formatting.")
         errors = []
         for client in clients:
             try:

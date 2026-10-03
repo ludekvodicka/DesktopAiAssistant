@@ -37,6 +37,10 @@ class TextField:
     def capture(self, target):
         return copy.deepcopy(self.snapshot)
 
+    def read_selection(self, target):
+        snapshot = self.capture(target)
+        return {"kind": "selection", "format": "plain", "text": snapshot["text"], "image": None, "origin": target["process"]}
+
     def copy_selection(self, target, plain=False):
         self.copies.append(target)
         if plain:
@@ -252,12 +256,53 @@ def test_read_selection_refuses_a_terminal_before_capture(runner, monkeypatch):
 
 def test_read_selection_strips_gmail_markers(runner, monkeypatch):
     engine, field, history = runner
-    engine.browser = SimpleNamespace(capture=lambda target: {"kind": "browser", "rich": True, "text": "<t0>Fish &amp; chips</t0><o1/> &lt;3"},
+    engine.browser = SimpleNamespace(supports=lambda target: True, capture=lambda target: {"kind": "browser", "rich": True, "text": "<t0>Fish &amp; chips</t0><o1/> &lt;3"},
                                      apply=no_apply)
     monkeypatch.setattr(engine, "apply", no_apply)
+    def unavailable(target):
+        raise RuntimeError("TextPattern unavailable")
+    monkeypatch.setattr(field, "read_selection", unavailable)
     source = engine.read_selection({"process": "chrome.exe"})
     assert source == {"kind": "selection", "format": "plain", "text": "Fish & chips <3", "image": None, "origin": "chrome.exe"}
     assert engine.edit_target is None
+
+
+def test_read_selection_uses_uia_in_browser_without_extension_or_clipboard(runner):
+    engine, field, history = runner
+    engine.browser = SimpleNamespace(supports=lambda target: True, capture=lambda target: pytest.fail("Extension must not be used"))
+    assert engine.read_selection({"process": "chrome.exe"})["text"] == "helo"
+    assert not field.copies and not field.writes and history.entries() == []
+
+
+def test_protected_uia_read_cannot_fall_back_to_extension_or_clipboard(runner, monkeypatch):
+    engine, field, history = runner
+    def protected(target):
+        raise engine_module.TextAccessDenied("Password fields cannot be read")
+    monkeypatch.setattr(field, "read_selection", protected)
+    with pytest.raises(engine_module.TextAccessDenied, match="Password"):
+        engine.read_selection({"process": "chrome.exe"})
+    assert not field.copies and history.entries() == []
+
+
+def test_explicit_uia_edit_uses_verified_write_and_preserves_history(runner, monkeypatch):
+    engine, field, history = runner
+    engine.browser = SimpleNamespace(supports=lambda target: True, capture=lambda target: pytest.fail("Extension must not be used"))
+    monkeypatch.setattr(engine_module.providers, "transform", lambda *args: "hello")
+    assert engine.edit_via("english_formal", {"process": "chrome.exe"}, "uia")
+    assert field.writes == ["hello"] and not field.copies and not field.pastes
+    entry = history.entries()[0]
+    assert entry["via"] == "uia" and entry["status"] == "applied"
+    assert entry["snapshot"]["foregroundOnly"]
+
+
+def test_default_browser_edit_still_requires_formatted_adapter(runner, monkeypatch):
+    engine, field, history = runner
+    def disconnected(target):
+        raise RuntimeError("Choose UIA plain text")
+    engine.browser = SimpleNamespace(supports=lambda target: True, capture=disconnected)
+    with pytest.raises(RuntimeError, match="Choose UIA"):
+        engine.edit("native", {"process": "chrome.exe"})
+    assert not field.writes and not field.copies and history.entries() == []
 
 
 def test_edit_via_clipboard_writes_the_result_to_the_clipboard(runner, monkeypatch):

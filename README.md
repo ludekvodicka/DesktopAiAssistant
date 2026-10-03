@@ -10,7 +10,7 @@ Select text in another app, open the ring, and choose an action. Correct English
 
 ## What it does
 
-- **Text actions:** **Fix EN → Formal**, **Fix EN → Social**, and **Fix CZ** for your native language, through an installed Claude or Codex CLI. The native language is a setting; Czech is the default. The next ring after each action offers **Current app** (Ctrl+C and Ctrl+V) and **Clipboard** as sources.
+- **Text actions:** **Fix EN → Formal**, **Fix EN → Social**, and **Fix CZ** for your native language, through an installed Claude or Codex CLI. The native language is a setting; Czech is the default. The next ring offers **Current app** (Ctrl+C and Ctrl+V), **UIA plain text** (Windows accessibility with verified insertion), and **Clipboard**.
 - **Translate or explain in your native language:** **Explain → Translate to CZ / Explain in CZ**, then a selection, screen region, or clipboard source. Results open in a reader with follow-up questions.
 - **A configurable ring:** eight fixed segments, custom labels and icons, and nested submenus. The open ring is controlled by the mouse only; keys keep going to the window underneath, and Esc closes the ring without being taken from that window. A click outside the ring closes it.
 - **Macros:** key combinations, text snippets, opening a file or URL, app activation, delays, and AI actions.
@@ -21,6 +21,27 @@ Select text in another app, open the ring, and choose an action. Correct English
 ![Action ring editor showing the Explain submenu and its two actions](docs/images/ring-editor.png)
 
 Screenshots use an isolated demo configuration, without personal editor contents, accounts, local paths, or conversation history.
+
+## Text access and editor support
+
+**The browser extension is optional for plain text.** The app can read text through Windows accessibility, talk directly to supported native editors, or use copy and paste. Choose the method to match the editor and whether you need to preserve formatting.
+
+| Method | Where it works | How to use it and what to expect |
+|---|---|---|
+| **Windows UI Automation (UIA)** | Desktop controls and browser fields that expose accessible text; selected text on web pages | **Translate / Explain → Selection** tries UIA automatically. For editing, choose **Fix → UIA plain text**. It checks the original editor and content before insertion and verifies the result. Replacing text can remove formatting. |
+| **Native Windows controls** | Standard Edit controls and supported RichEdit controls | Clicking a Fix action directly selects the Windows adapter. It reads and replaces text through native control messages and verifies the result. Supported controls can receive results in the background. |
+| **Notepad++ / Scintilla** | Notepad++ documents | The Windows adapter uses Scintilla's text interface, because Notepad++ does not expose its document through UIA text patterns. It supports selected text or the whole document, verified replacement, and native Undo. |
+| **Chrome / Edge extension** | Gmail compose bodies and subjects; plain `input` and `textarea` fields on enabled HTTPS sites | Clicking a Fix action directly in the browser uses the extension. Gmail formatting is preserved, and the original field is checked before insertion. Install the extension and enable each site you want to use. |
+| **Copy and paste** | Applications where the selection can be copied and the field accepts pasting | **Fix → Current app** uses Ctrl+C and Ctrl+V with plain text. It cannot verify the pasted result; if focus or input changes, it puts the result on the clipboard for manual insertion. |
+| **Clipboard** | Text already copied from any application | **Fix → Clipboard** replaces clipboard text with the result. **Translate / Explain → Clipboard** opens the result in the reader and also accepts formatted text or images. |
+
+For content that cannot be selected, **Translate / Explain → Region** sends a screen region to the AI provider. Translate and Explain display their results in the reader and leave the source application unchanged. If UIA cannot read a selection, they try the browser extension when applicable, then Ctrl+C.
+
+**New in the current source:** browser UIA reading and the explicit **UIA plain text** option shown below. These additions are not included in the published **0.6.0** installer. Chromium text capture has been tested; actual browser insertion, Edge and Firefox still need hands-on verification. UIA support depends on each application's accessibility implementation. Password fields and terminals are refused by the automatic selection reader.
+
+![Fix EN → Formal with Current app, UIA plain text and Clipboard sources; UIA plain text is highlighted](docs/images/uia-plain-text.png)
+
+The additional Fix ring makes the insertion method explicit. Under Translate and Explain, UIA is already part of **Selection**, so no separate UIA choice is needed.
 
 ## Download and install
 
@@ -84,7 +105,7 @@ These are usage examples, not recorded AI outputs.
 
 | Action | Source |
 |---|---|
-| **Selection** | The selected text in an editor, web page, or application. With no selection in an editor, the whole field. Content the editor adapters cannot read, such as a web page, is copied with Ctrl+C; the previous clipboard is restored when nothing else changed it. Terminals are refused. |
+| **Selection** | The selected text in an editor, web page, or application. Windows UI Automation reads supported controls, including browsers, without the extension or clipboard. With a caret in an editable field, the whole field. Unsupported content falls back to the browser extension, then Ctrl+C with guarded clipboard restoration. Password fields and terminals are refused. |
 | **Region** | Drag a rectangle on one screen. Hold Ctrl to move it without resizing; release Ctrl to resize again. Releasing the mouse submits the image for translation or explanation. Esc or a right click cancels. |
 | **Clipboard** | Formatted text, plain text, or an image from the clipboard. |
 
@@ -96,7 +117,9 @@ Explanations use the same reader, history and follow-up questions. **Copy explan
 
 ## Browser integration
 
-Browser editing needs the native host and extension. An installed copy has both in its program folder. For your own build, install Node.js 22 or later, then build the bundle:
+For browser reading, **Explain → Translate / Explain → Selection** first uses Windows UI Automation. To edit without an extension, select **Fix → UIA plain text**: this reads the selection or whole editable field and verifies the original content and the pasted result. It can remove formatting in the replaced part. UIA insertion waits for the original field to regain focus; support depends on the page's accessibility implementation.
+
+Formatted Gmail editing needs the native host and extension. An installed copy has both in its program folder. For your own build, install Node.js 22 or later, then build the bundle:
 
 ```powershell
 .\packaging\build.ps1
@@ -127,7 +150,7 @@ The app retains the original editor and selected range, then checks the editor i
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
-.venv/Scripts/python.exe -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_raw_input.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
+.venv/Scripts/python.exe -m pytest tests/test_core.py tests/test_engine.py tests/test_bridge.py tests/test_browser_setup.py tests/test_ring_editor.py tests/test_settings_layout.py tests/test_clipboard.py tests/test_windows_worker.py tests/test_uia_text.py tests/test_browser_uia.py tests/test_raw_input.py tests/test_translation.py tests/test_region.py tests/test_updates.py tests/test_package_release.py src/desktop_ai_assistant/shared/desktop/autoupdate/tests -q
 cd browser-extension
 npm ci
 npm run build

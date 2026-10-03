@@ -76,9 +76,8 @@ def test_real_windows_edit_selection_whole_and_conflict():
         win32gui.DestroyWindow(parent)
 
 
-def test_read_only_edit_is_read_through_copy_and_clipboard_is_restored():
+def test_read_only_edit_is_read_without_touching_the_clipboard():
     clipboard = Clipboard()
-    exclude = win32clipboard.RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing")
     users, _ = clipboard.backup()
     parent = open_edit(win32con.ES_READONLY)
     adapter = WindowsText()
@@ -87,11 +86,12 @@ def test_read_only_edit_is_read_through_copy_and_clipboard_is_restored():
     try:
         clipboard.clipboard.setText("synthetic previous clipboard")
         pythoncom.OleFlushClipboard()
+        sequence = win32clipboard.GetClipboardSequenceNumber()
         pump(lambda: sources.append(engine.read_selection(foreground())))
         clipboard.app.processEvents()
         assert sources == [{"kind": "selection", "format": "plain", "text": "world", "image": None, "origin": "python.exe"}]
         assert clipboard.clipboard.text() == "synthetic previous clipboard"
-        assert win32clipboard.IsClipboardFormatAvailable(exclude)
+        assert win32clipboard.GetClipboardSequenceNumber() == sequence
     finally:
         adapter.close()
         win32gui.DestroyWindow(parent)

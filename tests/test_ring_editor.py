@@ -298,12 +298,13 @@ def test_language_edits_offer_clipboard_and_current_app_as_the_next_ring(tmp_pat
         backend.hoverChild(0)
         assert [(x["id"], x["name"], x["title"], x["enabled"]) for x in backend.variants] == [
             ("english_formal@app", "Current app", "Fix EN · Formal · Current app", True),
+            ("english_formal@uia", "UIA plain text", "Fix EN · Formal · UIA plain text", True),
             ("english_formal@clipboard", "Clipboard", "Fix EN · Formal · Clipboard", True)]
         assert all(x["inner"] == backend.children[0]["outer"] < x["outer"] <= 298 for x in backend.variants)
         backend.hoverChild(1)
-        assert backend.variants[1]["id"] == "english_social@clipboard"
+        assert backend.variants[1]["id"] == "english_social@uia"
         backend.hover(3)
-        assert [x["id"] for x in backend.children] == ["native@app", "native@clipboard"] and backend.variants == []
+        assert [x["id"] for x in backend.children] == ["native@app", "native@uia", "native@clipboard"] and backend.variants == []
         assert backend.children[0]["title"] == "Fix CZ · Current app"
         backend.hover(2)
         backend.hoverChild(0)
@@ -322,14 +323,14 @@ def test_language_edits_offer_clipboard_and_current_app_as_the_next_ring(tmp_pat
         backend.hotkey("Ctrl+Alt+F11")
         backend.hover(1)
         backend.hoverChild(0)
-        assert [x["enabled"] for x in backend.variants] == [False, True]
+        assert [x["enabled"] for x in backend.variants] == [False, False, True]
     finally:
         backend.close()
         app.removeNativeEventFilter(backend.hotkeys)
 
 
 @pytest.mark.parametrize("slot,branch,children,variants", [
-    (1, 0, ["english_formal", "english_social"], ["english_formal@app", "english_formal@clipboard"]),
+    (1, 0, ["english_formal", "english_social"], ["english_formal@app", "english_formal@uia", "english_formal@clipboard"]),
     (2, 0, ["translate", "explain"], ["translate_selection", "translate_region", "translate_clipboard"]),
     (2, 1, ["translate", "explain"], ["explain_selection", "explain_region", "explain_clipboard"]),
 ])
