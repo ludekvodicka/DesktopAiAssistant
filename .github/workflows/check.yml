@@ -17,7 +17,7 @@ jobs:
           python-version: '3.14'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '22'
+          node-version: '22.23.4'
       - run: python -m pip install -r requirements.lock.txt
       - run: python -m pip install -e .
       - name: Offline desktop checks
