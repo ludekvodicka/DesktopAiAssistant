@@ -6,7 +6,7 @@ Select text in another app, open the ring, and choose an action. Correct English
 
 ![Explain menu with translation, explanation and source submenus](docs/images/action-ring.png)
 
-**Windows preview, version 0.6.0.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
+**Windows preview, version 0.7.0.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
 
 ## What it does
 
@@ -37,7 +37,7 @@ Screenshots use an isolated demo configuration, without personal editor contents
 
 For content that cannot be selected, **Translate / Explain → Region** sends a screen region to the AI provider. Translate and Explain display their results in the reader and leave the source application unchanged. If UIA cannot read a selection, they try the browser extension when applicable, then Ctrl+C.
 
-**New in the current source:** browser UIA reading and the explicit **UIA plain text** option shown below. These additions are not included in the published **0.6.0** installer. Chromium text capture has been tested; actual browser insertion, Edge and Firefox still need hands-on verification. UIA support depends on each application's accessibility implementation. Password fields and terminals are refused by the automatic selection reader.
+**New in 0.7.0:** browser UIA reading and the explicit **UIA plain text** option shown below. Fix actions also accept changes to number and percentage notation, such as `0day` to `0-day`, `2` to `two`, or `12,5 %` to `12.5%`, without rejecting the result. Chromium text capture has been tested; actual browser insertion, Edge and Firefox still need hands-on verification. UIA support depends on each application's accessibility implementation. Password fields and terminals are refused by the automatic selection reader.
 
 ![Fix EN → Formal with Current app, UIA plain text and Clipboard sources; UIA plain text is highlighted](docs/images/uia-plain-text.png)
 

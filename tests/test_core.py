@@ -62,10 +62,29 @@ def test_system_migration_preserves_direct_restart_and_custom_configuration(tmp_
         validate(config.value)
 
 
-@pytest.mark.parametrize("result", ["See https://wrong.test in 12 days", "See https://example.test in 13 days"])
-def test_literal_changes_are_rejected(result):
+@pytest.mark.parametrize("original,result", [
+    ("See https://example.test/12", "See https://example.test/13"),
+    ("Email user1@example.test", "Email user2@example.test"),
+    ("Ask @user1", "Ask @user2"),
+    ("Use `count = 2`", "Use `count = 3`"),
+    ("```\ncount = 2\n```", "```\ncount = 3\n```"),
+])
+def test_literal_changes_are_rejected(original, result):
     with pytest.raises(ValueError):
-        validate_result("See https://example.test in 12 days", {"text": result})
+        validate_result(original, {"text": result})
+
+
+@pytest.mark.parametrize("original,result", [
+    ("a php 0day", "a PHP 0-day"),
+    ("a php 0day", "a PHP zero-day"),
+    ("in 2 days", "in two days"),
+    ("12,5 %", "12.5%"),
+    ("20%", "twenty percent"),
+    ("1 000 items", "1,000 items"),
+    ("See https://example.test in 12 days", "See https://example.test in 13 days"),
+])
+def test_number_changes_do_not_block_edits(original, result):
+    assert validate_result(original, {"text": result}) == result
 
 
 def test_tags_and_code_remain_exact():

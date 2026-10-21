@@ -30,7 +30,7 @@ GUARD = "You are a text transformation engine, not a coding agent. Never use too
 # A translation moves sentence punctuation, so a URL never ends with it.
 LINKS = re.compile(r"https?://[^\s<>\[\]]*[^\s<>\[\].,;:!?'\")]|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
 IMAGES = re.compile(r"!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])")
-LITERALS = re.compile(r"```[\s\S]*?```|`[^`\n]+`|https?://[^\s<>\[\]]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|@[\w]+|\b\d+(?:[.,:/-]\d+)*\b")
+LITERALS = re.compile(r"```[\s\S]*?```|`[^`\n]+`|https?://[^\s<>\[\]]+|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|@[\w]+")
 TAGS = re.compile(r"</?t\d+>|<o\d+/>")
 
 
@@ -56,7 +56,7 @@ def validate_result(original, result):
     if not text.strip() or len(text) > 80000:
         raise ValueError("The provider returned empty or oversized text")
     if collections.Counter(LITERALS.findall(original)) != collections.Counter(LITERALS.findall(text)):
-        raise ValueError("The result changed a protected number, URL, email, mention or code")
+        raise ValueError("The result changed a protected URL, email, mention or code")
     if TAGS.findall(original) != TAGS.findall(text):
         raise ValueError("The result changed formatting markers")
     return text
