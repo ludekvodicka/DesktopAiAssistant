@@ -157,6 +157,17 @@ class TestTrayEntry:
 
 
 class TestSourceRun:
+    def test_metadata_checksums_and_downloads_share_the_secure_transport(self, app, tmp_path, monkeypatch):
+        from desktop_ai_assistant.update_transport import create_update_transport
+        import desktop_ai_assistant.updates as module
+
+        transport = create_update_transport()
+        monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
+        monkeypatch.setattr(module, "create_update_transport", lambda: transport)
+        updates = Updates.create(app, busy=lambda: False)
+        assert updates._manager._feed._transport is transport
+        assert updates._manager._stager._transport is transport
+
     def test_updates_are_off_hidden_and_never_touch_the_network(self, app, tmp_path, monkeypatch):
         monkeypatch.setenv("DESKTOP_AI_DATA", str(tmp_path))
 

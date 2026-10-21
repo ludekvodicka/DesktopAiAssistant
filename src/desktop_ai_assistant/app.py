@@ -7,6 +7,9 @@ import sys
 
 def main():
     multiprocessing.freeze_support()
+    if sys.argv[1:2] == ["--verify-update-tls"]:
+        from .update_tls_check import main as verify_update_tls
+        return verify_update_tls(sys.argv[2:])
     if "--native-host" in sys.argv:
         from .bridge import native_host
         raise SystemExit(native_host())

@@ -1,4 +1,5 @@
 altgraph==0.17.5
+certifi==2026.10.19
 colorama==0.4.6
 comtypes==1.4.17
 iniconfig==2.3.0

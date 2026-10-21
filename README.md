@@ -6,7 +6,9 @@ Select text in another app, open the ring, and choose an action. Correct English
 
 ![Explain menu with translation, explanation and source submenus](docs/images/action-ring.png)
 
-**Windows preview, version 0.7.0.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
+**Windows preview, version 0.7.1.** Built with Python, PySide6 and Qt Quick. Releases provide a per-user Windows installer that keeps the app up to date; build instructions for source runs are below. Editor compatibility varies. Gmail still needs a full signed-in acceptance test.
+
+Version 0.7.1 uses the bundled certifi 2026.10.19 trust store for every update request, including downloads, to reject the compromised eMudhra certificate chains.
 
 ## What it does
 

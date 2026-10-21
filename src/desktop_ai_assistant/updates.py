@@ -37,9 +37,9 @@ from .shared.desktop.autoupdate.status import (
     UpdateReady,
     UpdateStatus,
 )
-from .shared.desktop.autoupdate.transport import UpdateTransport
 from .shared.desktop.autoupdate.view import UpdateAction, UpdateView, UpdateViewModel
 from .update_stage import UpdateStage
+from .update_transport import create_update_transport
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class Updates(QObject):
             Path(sys.executable).parent, "DesktopAiAssistant-{version}-win-x64.zip",
             "DesktopAiAssistant", "DesktopAiAssistant.exe", "DesktopAiHost.exe") if frozen else None
         root = data_dir() / "updates"
-        transport = UpdateTransport(f"DesktopAiAssistant/{__version__}")
+        transport = create_update_transport()
         facts = UpdateRuntimeFacts(frozen, sys.platform, target)
         manager = UpdateManager(
             running=__version__,
